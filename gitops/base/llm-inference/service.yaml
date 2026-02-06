@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: qwen25-vl-32b-svc
+  labels:
+    app: qwen25-vl-32b
+    app.kubernetes.io/part-of: zelda-rl
+spec:
+  selector:
+    app: qwen25-vl-32b
+    llm-d.ai/inferenceServing: "true"
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qwen25-32b-svc
+  labels:
+    app: qwen25-32b
+    app.kubernetes.io/part-of: zelda-rl
+spec:
+  selector:
+    app: qwen25-32b
+    llm-d.ai/inferenceServing: "true"
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qwen25-7b-svc
+  labels:
+    app: qwen25-7b
+    app.kubernetes.io/part-of: zelda-rl
+spec:
+  selector:
+    app: qwen25-7b
+    llm-d.ai/inferenceServing: "true"
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP

@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zelda-rl-prod
+  namespace: openshift-gitops
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+    environment: prod
+spec:
+  project: zelda-rl
+  source:
+    repoURL: https://github.com/cnuland/hello-chris-rl-zelda.git
+    targetRevision: HEAD
+    path: gitops/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zelda-rl
+  syncPolicy:
+    # Prod requires manual sync — no automated section
+    syncOptions:
+    - CreateNamespace=true
+    - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m

@@ -1,0 +1,67 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ray-cluster-manager
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+rules:
+- apiGroups: [ray.io]
+  resources: [rayclusters, rayjobs]
+  verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups: [""]
+  resources: [pods, pods/log]
+  verbs: [get, list, watch]
+- apiGroups: [""]
+  resources: [services]
+  verbs: [get, list, watch, create, delete]
+- apiGroups: [""]
+  resources: [events]
+  verbs: [get, list, watch]
+- apiGroups: [""]
+  resources: [secrets]
+  verbs: [get, list]
+- apiGroups: [""]
+  resources: [configmaps]
+  verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups: [route.openshift.io]
+  resources: [routes]
+  verbs: [get, list, watch, create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: zelda-rl-training-ray-manager
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ray-cluster-manager
+subjects:
+- kind: ServiceAccount
+  name: zelda-rl-training
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: zelda-rl-kueue-viewer
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+rules:
+- apiGroups: [kueue.x-k8s.io]
+  resources: [workloads, localqueues, clusterqueues]
+  verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: zelda-rl-training-kueue-viewer
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: zelda-rl-kueue-viewer
+subjects:
+- kind: ServiceAccount
+  name: zelda-rl-training

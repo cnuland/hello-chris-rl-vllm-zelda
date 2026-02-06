@@ -1,0 +1,27 @@
+# Staging: 2 LLM replicas, standard model sizes
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: qwen25-vl-32b
+spec:
+  predictor:
+    minReplicas: 1
+    maxReplicas: 2
+---
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: qwen25-32b
+spec:
+  predictor:
+    minReplicas: 1
+    maxReplicas: 2
+---
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: qwen25-7b
+spec:
+  predictor:
+    minReplicas: 1
+    maxReplicas: 2

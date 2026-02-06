@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: zelda-rl-dashboard
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: rl-training
+spec:
+  selector:
+    ray.io/cluster: zelda-rl
+    ray.io/node-type: head
+  ports:
+  - name: dashboard
+    port: 8265
+    targetPort: 8265
+    protocol: TCP
+  - name: client
+    port: 10001
+    targetPort: 10001
+    protocol: TCP
+  type: ClusterIP

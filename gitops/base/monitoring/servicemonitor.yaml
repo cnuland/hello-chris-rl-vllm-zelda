@@ -1,0 +1,53 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: zelda-rl-vllm-metrics
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: zelda-rl
+      app.kubernetes.io/component: llm-inference
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: zelda-rl-epp-metrics
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    matchExpressions:
+    - key: app
+      operator: In
+      values:
+      - llm-d-epp-vision
+      - llm-d-epp-puzzle
+      - llm-d-epp-text
+  endpoints:
+  - port: metrics
+    path: /metrics
+    interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: zelda-rl-training-metrics
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      ray.io/cluster: zelda-rl
+  endpoints:
+  - port: dashboard
+    path: /api/prometheus_health
+    interval: 30s

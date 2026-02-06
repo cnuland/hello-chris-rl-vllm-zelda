@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: zelda-reward-model
+  labels:
+    app: zelda-reward-model
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: evaluator
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: zelda-reward-model
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: reward-model
+        image: quay.io/cnuland/zelda-kuberay-worker:latest
+        command: [python, scripts/train_reward_model.py]
+        env:
+        - name: S3_ENDPOINT_URL
+          value: http://minio-api.zelda-rl.svc.cluster.local:9000
+        - name: S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: access-key
+        - name: S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: secret-key
+        resources:
+          requests:
+            cpu: "2"
+            memory: 4Gi
+          limits:
+            cpu: "4"
+            memory: 8Gi

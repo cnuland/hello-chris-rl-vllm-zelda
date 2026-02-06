@@ -1,0 +1,99 @@
+# Dev: single LLM replica, reduced GPU, shorter context
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: qwen25-vl-32b
+spec:
+  predictor:
+    minReplicas: 1
+    maxReplicas: 1
+    containers:
+    - name: kserve-container
+      args:
+      - --model=Qwen/Qwen2.5-VL-7B-Instruct
+      - --host=0.0.0.0
+      - --port=8080
+      - --enable-prefix-caching
+      - --gpu-memory-utilization=0.85
+      - --max-model-len=2048
+      - --max-num-seqs=16
+      - --trust-remote-code
+      - --disable-log-requests
+      - --kv-cache-dtype=auto
+      - --served-model-name=qwen25-vl-32b
+      resources:
+        requests:
+          cpu: "4"
+          memory: "16Gi"
+          nvidia.com/gpu: "1"
+        limits:
+          cpu: "8"
+          memory: "32Gi"
+          nvidia.com/gpu: "1"
+    nodeSelector: {}
+    tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+---
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: qwen25-32b
+spec:
+  predictor:
+    minReplicas: 1
+    maxReplicas: 1
+    containers:
+    - name: kserve-container
+      args:
+      - --model=Qwen/Qwen2.5-7B-Instruct
+      - --host=0.0.0.0
+      - --port=8080
+      - --enable-prefix-caching
+      - --gpu-memory-utilization=0.85
+      - --max-model-len=2048
+      - --max-num-seqs=32
+      - --trust-remote-code
+      - --disable-log-requests
+      - --kv-cache-dtype=auto
+      - --served-model-name=qwen25-32b
+      resources:
+        requests:
+          cpu: "4"
+          memory: "16Gi"
+          nvidia.com/gpu: "1"
+        limits:
+          cpu: "8"
+          memory: "32Gi"
+          nvidia.com/gpu: "1"
+    nodeSelector: {}
+    tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+---
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: qwen25-7b
+spec:
+  predictor:
+    minReplicas: 1
+    maxReplicas: 1
+    containers:
+    - name: kserve-container
+      resources:
+        requests:
+          cpu: "2"
+          memory: "8Gi"
+          nvidia.com/gpu: "1"
+        limits:
+          cpu: "4"
+          memory: "16Gi"
+          nvidia.com/gpu: "1"
+    nodeSelector: {}
+    tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule

@@ -1,0 +1,33 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: zelda-rl-llm-inference
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+rules:
+- apiGroups: [""]
+  resources: [pods, services, endpoints, persistentvolumeclaims, events, configmaps, secrets]
+  verbs: [get, list, watch]
+- apiGroups: [apps]
+  resources: [deployments, replicasets]
+  verbs: [get, list, watch]
+- apiGroups: [serving.kserve.io]
+  resources: ["*"]
+  verbs: [get, list, watch]
+- apiGroups: [inference.networking.x-k8s.io]
+  resources: [inferencepools]
+  verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: zelda-rl-llm-inference
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: zelda-rl-llm-inference
+subjects:
+- kind: ServiceAccount
+  name: llm-inference-sa

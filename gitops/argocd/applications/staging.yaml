@@ -1,0 +1,30 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zelda-rl-staging
+  namespace: openshift-gitops
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+    environment: staging
+spec:
+  project: zelda-rl
+  source:
+    repoURL: https://github.com/cnuland/hello-chris-rl-zelda.git
+    targetRevision: HEAD
+    path: gitops/overlays/staging
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zelda-rl-staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
+    - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

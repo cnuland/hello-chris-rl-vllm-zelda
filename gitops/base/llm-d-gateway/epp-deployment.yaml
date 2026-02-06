@@ -1,0 +1,176 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-d-epp-vision
+  labels:
+    app: llm-d-epp-vision
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: llm-d-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-d-epp-vision
+  template:
+    metadata:
+      labels:
+        app: llm-d-epp-vision
+        app.kubernetes.io/part-of: zelda-rl
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      containers:
+      - name: epp
+        image: ghcr.io/llm-d/llm-d-inference-scheduler:latest
+        ports:
+        - containerPort: 9002
+          name: grpc
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: ENABLE_KVCACHE_AWARE_SCORER
+          value: "true"
+        - name: PD_ENABLED
+          value: "true"
+        - name: BATCH_MAX_TOKENS
+          value: "1024"
+        - name: POOL_NAME
+          value: qwen25-vl-pool
+        - name: POOL_NAMESPACE
+          value: zelda-rl
+        resources:
+          requests:
+            cpu: "1"
+            memory: 1Gi
+          limits:
+            cpu: "2"
+            memory: 2Gi
+        readinessProbe:
+          grpc:
+            port: 9002
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          grpc:
+            port: 9002
+          initialDelaySeconds: 15
+          periodSeconds: 20
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-d-epp-puzzle
+  labels:
+    app: llm-d-epp-puzzle
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: llm-d-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-d-epp-puzzle
+  template:
+    metadata:
+      labels:
+        app: llm-d-epp-puzzle
+        app.kubernetes.io/part-of: zelda-rl
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      containers:
+      - name: epp
+        image: ghcr.io/llm-d/llm-d-inference-scheduler:latest
+        ports:
+        - containerPort: 9002
+          name: grpc
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: ENABLE_KVCACHE_AWARE_SCORER
+          value: "true"
+        - name: PD_ENABLED
+          value: "true"
+        - name: BATCH_MAX_TOKENS
+          value: "1024"
+        - name: POOL_NAME
+          value: qwen25-puzzle-pool
+        - name: POOL_NAMESPACE
+          value: zelda-rl
+        resources:
+          requests:
+            cpu: "1"
+            memory: 1Gi
+          limits:
+            cpu: "2"
+            memory: 2Gi
+        readinessProbe:
+          grpc:
+            port: 9002
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          grpc:
+            port: 9002
+          initialDelaySeconds: 15
+          periodSeconds: 20
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-d-epp-text
+  labels:
+    app: llm-d-epp-text
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: llm-d-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-d-epp-text
+  template:
+    metadata:
+      labels:
+        app: llm-d-epp-text
+        app.kubernetes.io/part-of: zelda-rl
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      containers:
+      - name: epp
+        image: ghcr.io/llm-d/llm-d-inference-scheduler:latest
+        ports:
+        - containerPort: 9002
+          name: grpc
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: ENABLE_KVCACHE_AWARE_SCORER
+          value: "true"
+        - name: PD_ENABLED
+          value: "true"
+        - name: BATCH_MAX_TOKENS
+          value: "1024"
+        - name: POOL_NAME
+          value: qwen25-text-pool
+        - name: POOL_NAMESPACE
+          value: zelda-rl
+        resources:
+          requests:
+            cpu: "1"
+            memory: 1Gi
+          limits:
+            cpu: "2"
+            memory: 2Gi
+        readinessProbe:
+          grpc:
+            port: 9002
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          grpc:
+            port: 9002
+          initialDelaySeconds: 15
+          periodSeconds: 20

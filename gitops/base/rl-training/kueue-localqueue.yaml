@@ -1,0 +1,8 @@
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: LocalQueue
+metadata:
+  name: zelda-ray-queue
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+spec:
+  clusterQueue: ray-cluster-queue

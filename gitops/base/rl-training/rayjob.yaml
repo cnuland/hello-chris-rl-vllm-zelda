@@ -1,0 +1,27 @@
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: zelda-rl-training-burst
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: rl-training
+spec:
+  entrypoint: python scripts/run_rollouts.py
+  runtimeEnvYAML: |
+    pip:
+      - boto3>=1.28.0
+      - pyboy>=2.6.0
+      - Pillow>=9.0.0
+      - PyYAML>=6.0
+      - httpx>=0.25.0
+      - pydantic>=2.0.0
+    working_dir: "."
+    excludes:
+      - "old/"
+      - "new/"
+      - "*.ipynb"
+      - "*.md"
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 300
+  clusterSelector:
+    ray.io/cluster: zelda-rl

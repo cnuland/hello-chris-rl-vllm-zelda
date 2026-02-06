@@ -1,0 +1,124 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zelda-rl-grafana-dashboard
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: monitoring
+    grafana_dashboard: "1"
+data:
+  zelda-rl-dashboard.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "title": "Control Mode Distribution",
+          "type": "piechart",
+          "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+          "targets": [
+            {"expr": "sum by (mode) (zelda_mode_active)", "legendFormat": "{{mode}}"}
+          ]
+        },
+        {
+          "title": "Unique Rooms / 10k Steps",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
+          "targets": [
+            {"expr": "zelda_unique_rooms", "legendFormat": "rooms"}
+          ]
+        },
+        {
+          "title": "Unique Tiles / Room",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+          "targets": [
+            {"expr": "zelda_unique_tiles", "legendFormat": "tiles"}
+          ]
+        },
+        {
+          "title": "Doorway Ping-Pong Count",
+          "type": "stat",
+          "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+          "targets": [
+            {"expr": "zelda_doorway_pingpong", "legendFormat": "pingpong"}
+          ]
+        },
+        {
+          "title": "LLM Latency by Route (p50/p95)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [
+            {"expr": "histogram_quantile(0.5, rate(vllm_request_duration_seconds_bucket[5m]))", "legendFormat": "p50"},
+            {"expr": "histogram_quantile(0.95, rate(vllm_request_duration_seconds_bucket[5m]))", "legendFormat": "p95"}
+          ]
+        },
+        {
+          "title": "KV-Cache Hit Rate",
+          "type": "gauge",
+          "gridPos": {"h": 8, "w": 6, "x": 12, "y": 8},
+          "targets": [
+            {"expr": "rate(vllm_cache_hits_total[5m]) / rate(vllm_cache_requests_total[5m])", "legendFormat": "hit_rate"}
+          ]
+        },
+        {
+          "title": "Token Usage by Route",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 6, "x": 18, "y": 8},
+          "targets": [
+            {"expr": "rate(vllm_tokens_total[5m])", "legendFormat": "{{route}}"}
+          ]
+        },
+        {
+          "title": "Evaluator Agreement Rate",
+          "type": "stat",
+          "gridPos": {"h": 8, "w": 6, "x": 0, "y": 16},
+          "targets": [
+            {"expr": "zelda_evaluator_agreement_rate", "legendFormat": "agreement"}
+          ]
+        },
+        {
+          "title": "Episodic Return",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 6, "y": 16},
+          "targets": [
+            {"expr": "zelda_episode_reward_mean", "legendFormat": "mean_return"}
+          ]
+        },
+        {
+          "title": "PPO Entropy / KL",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 6, "x": 18, "y": 16},
+          "targets": [
+            {"expr": "zelda_ppo_entropy", "legendFormat": "entropy"},
+            {"expr": "zelda_ppo_kl", "legendFormat": "kl"}
+          ]
+        },
+        {
+          "title": "ArgoCD Sync Status",
+          "type": "stat",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+          "targets": [
+            {"expr": "argocd_app_sync_status{name=~\"zelda-rl.*\"}", "legendFormat": "{{name}}: {{sync_status}}"}
+          ]
+        },
+        {
+          "title": "ArgoCD Health Status",
+          "type": "stat",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+          "targets": [
+            {"expr": "argocd_app_health_status{name=~\"zelda-rl.*\"}", "legendFormat": "{{name}}: {{health_status}}"}
+          ]
+        }
+      ],
+      "schemaVersion": 39,
+      "tags": ["zelda-rl", "openshift-ai"],
+      "templating": {"list": []},
+      "time": {"from": "now-1h", "to": "now"},
+      "title": "Zelda RL Agent Dashboard",
+      "uid": "zelda-rl-dashboard"
+    }

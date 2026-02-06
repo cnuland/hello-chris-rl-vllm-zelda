@@ -1,0 +1,49 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: zelda-rl
+  namespace: openshift-gitops
+spec:
+  description: Zelda RL + LLM Hybrid Agent
+  sourceRepos:
+  - "https://github.com/cnuland/hello-chris-rl-zelda.git"
+  - "*"
+  destinations:
+  - namespace: zelda-rl
+    server: https://kubernetes.default.svc
+  - namespace: zelda-rl-dev
+    server: https://kubernetes.default.svc
+  - namespace: zelda-rl-staging
+    server: https://kubernetes.default.svc
+  - namespace: openshift-machine-api
+    server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+  - group: machine.openshift.io
+    kind: MachineSet
+  - group: rbac.authorization.k8s.io
+    kind: ClusterRole
+  - group: rbac.authorization.k8s.io
+    kind: ClusterRoleBinding
+  namespaceResourceWhitelist:
+  - group: ""
+    kind: "*"
+  - group: apps
+    kind: "*"
+  - group: batch
+    kind: "*"
+  - group: serving.kserve.io
+    kind: "*"
+  - group: ray.io
+    kind: "*"
+  - group: gateway.networking.k8s.io
+    kind: "*"
+  - group: inference.networking.x-k8s.io
+    kind: "*"
+  - group: networking.k8s.io
+    kind: "*"
+  - group: monitoring.coreos.com
+    kind: "*"
+  - group: kueue.x-k8s.io
+    kind: "*"
+  - group: route.openshift.io
+    kind: "*"

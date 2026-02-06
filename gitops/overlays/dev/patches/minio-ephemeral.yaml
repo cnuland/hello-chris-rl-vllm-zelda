@@ -1,0 +1,12 @@
+# Dev: ephemeral MinIO storage (emptyDir instead of PVC)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+spec:
+  template:
+    spec:
+      volumes:
+      - name: storage
+        emptyDir:
+          sizeLimit: 10Gi
