@@ -9,7 +9,7 @@ metadata:
 spec:
   project: zelda-rl
   source:
-    repoURL: https://github.com/cnuland/hello-chris-rl-zelda.git
+    repoURL: https://github.com/cnuland/hello-chris-rl-vllm-zelda.git
     targetRevision: HEAD
     path: gitops/overlays/staging
   destination:

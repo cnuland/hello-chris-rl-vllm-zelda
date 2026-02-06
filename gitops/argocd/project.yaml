@@ -6,7 +6,7 @@ metadata:
 spec:
   description: Zelda RL + LLM Hybrid Agent
   sourceRepos:
-  - "https://github.com/cnuland/hello-chris-rl-zelda.git"
+  - "https://github.com/cnuland/hello-chris-rl-vllm-zelda.git"
   - "*"
   destinations:
   - namespace: zelda-rl

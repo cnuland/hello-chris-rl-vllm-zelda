@@ -1,0 +1,57 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: zelda-rl
+  namespace: openshift-gitops
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+  - list:
+      elements:
+      - env: dev
+        namespace: zelda-rl-dev
+        revision: HEAD
+        autoSync: true
+      - env: staging
+        namespace: zelda-rl-staging
+        revision: HEAD
+        autoSync: true
+      - env: prod
+        namespace: zelda-rl
+        revision: HEAD
+        autoSync: false
+  template:
+    metadata:
+      name: "zelda-rl-{{.env}}"
+      namespace: openshift-gitops
+      labels:
+        app.kubernetes.io/part-of: zelda-rl
+        environment: "{{.env}}"
+    spec:
+      project: zelda-rl
+      source:
+        repoURL: https://github.com/cnuland/hello-chris-rl-vllm-zelda.git
+        targetRevision: "{{.revision}}"
+        path: "gitops/overlays/{{.env}}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{.namespace}}"
+      syncPolicy:
+        syncOptions:
+        - CreateNamespace=true
+        - ServerSideApply=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+  templatePatch: |
+    {{- if eq .autoSync "true" }}
+    spec:
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+    {{- end }}
