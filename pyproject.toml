@@ -34,6 +34,9 @@ reward = [
     "scikit-learn>=1.3.0",
 ]
 
+[tool.setuptools.packages.find]
+include = ["agent*", "tests*"]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100

@@ -1,0 +1,73 @@
+apiVersion: infrastructure.opendatahub.io/v1
+kind: HardwareProfile
+metadata:
+  annotations:
+    opendatahub.io/dashboard-feature-visibility: '[]'
+    opendatahub.io/disabled: 'false'
+    opendatahub.io/display-name: gpu-1x-profile
+  name: gpu-1x-profile
+  namespace: redhat-ods-applications
+spec:
+  identifiers:
+  - defaultCount: '4'
+    displayName: CPU
+    identifier: cpu
+    maxCount: '8'
+    minCount: 1
+    resourceType: CPU
+  - defaultCount: 32Gi
+    displayName: Memory
+    identifier: memory
+    maxCount: 64Gi
+    minCount: 8Gi
+    resourceType: Memory
+  - defaultCount: 1
+    displayName: GPU
+    identifier: nvidia.com/gpu
+    maxCount: 1
+    minCount: 1
+    resourceType: Accelerator
+  scheduling:
+    type: Node
+    node:
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+---
+apiVersion: infrastructure.opendatahub.io/v1
+kind: HardwareProfile
+metadata:
+  annotations:
+    opendatahub.io/dashboard-feature-visibility: '[]'
+    opendatahub.io/disabled: 'false'
+    opendatahub.io/display-name: gpu-2x-profile
+  name: gpu-2x-profile
+  namespace: redhat-ods-applications
+spec:
+  identifiers:
+  - defaultCount: '8'
+    displayName: CPU
+    identifier: cpu
+    maxCount: '16'
+    minCount: 1
+    resourceType: CPU
+  - defaultCount: 64Gi
+    displayName: Memory
+    identifier: memory
+    maxCount: 120Gi
+    minCount: 16Gi
+    resourceType: Memory
+  - defaultCount: 2
+    displayName: GPU
+    identifier: nvidia.com/gpu
+    maxCount: 2
+    minCount: 2
+    resourceType: Accelerator
+  scheduling:
+    type: Node
+    node:
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule

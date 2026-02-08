@@ -6,7 +6,7 @@ metadata:
 spec:
   description: Zelda RL + LLM Hybrid Agent
   sourceRepos:
-  - "https://github.com/cnuland/hello-chris-rl-vllm-zelda.git"
+  - "https://github.com/cnuland/hello-chris-rl-zelda.git"
   - "*"
   destinations:
   - namespace: zelda-rl
@@ -15,11 +15,7 @@ spec:
     server: https://kubernetes.default.svc
   - namespace: zelda-rl-staging
     server: https://kubernetes.default.svc
-  - namespace: openshift-machine-api
-    server: https://kubernetes.default.svc
   clusterResourceWhitelist:
-  - group: machine.openshift.io
-    kind: MachineSet
   - group: rbac.authorization.k8s.io
     kind: ClusterRole
   - group: rbac.authorization.k8s.io

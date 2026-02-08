@@ -3,13 +3,10 @@ kind: Kustomization
 namespace: zelda-rl
 
 resources:
-- serviceaccount.yaml
-- rbac.yaml
 - secret.yaml
-- service.yaml
-- inferenceservice-vision.yaml
-- inferenceservice-puzzle.yaml
-- inferenceservice-text.yaml
+- llm-inference-text.yaml
+- llm-inference-puzzle.yaml
+- llm-inference-vision.yaml
 
 labels:
 - pairs:

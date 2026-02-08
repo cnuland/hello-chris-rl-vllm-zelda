@@ -14,6 +14,10 @@ spec:
     template:
       spec:
         serviceAccountName: zelda-rl-training
+        tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
         containers:
         - name: ray-head
           image: quay.io/cnuland/zelda-kuberay-worker:latest
@@ -34,13 +38,13 @@ spec:
             name: client
           env:
           - name: RAY_WORKERS
-            value: "30"
+            value: "10"
           - name: ENVS_PER_WORKER
-            value: "6"
+            value: "1"
           - name: EPISODE_LENGTH
-            value: "61440"
+            value: "30000"
           - name: BATCH_SIZE
-            value: "32768"
+            value: "4096"
           - name: S3_ENDPOINT_URL
             value: http://minio-api.zelda-rl.svc.cluster.local:9000
           - name: S3_ACCESS_KEY
@@ -54,36 +58,42 @@ spec:
                 name: minio-credentials
                 key: secret-key
           - name: LLM_GATEWAY_URL
-            value: http://llm-d-gateway.zelda-rl.svc.cluster.local:8080
+            value: http://openshift-ai-inference-openshift-default.openshift-ingress.svc.cluster.local
+          - name: LLM_NAMESPACE
+            value: zelda-rl
   workerGroupSpecs:
-  - replicas: 3
-    minReplicas: 1
-    maxReplicas: 10
+  - replicas: 10
+    minReplicas: 3
+    maxReplicas: 20
     groupName: pyboy-workers
     rayStartParams: {}
     template:
       spec:
         serviceAccountName: zelda-rl-training
+        tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
         containers:
         - name: ray-worker
           image: quay.io/cnuland/zelda-kuberay-worker:latest
           imagePullPolicy: Always
           resources:
             requests:
-              cpu: "6"
-              memory: 24Gi
+              cpu: "4"
+              memory: 8Gi
             limits:
-              cpu: "8"
-              memory: 32Gi
+              cpu: "6"
+              memory: 12Gi
           env:
           - name: RAY_WORKERS
-            value: "30"
+            value: "10"
           - name: ENVS_PER_WORKER
-            value: "6"
+            value: "1"
           - name: EPISODE_LENGTH
-            value: "61440"
+            value: "30000"
           - name: BATCH_SIZE
-            value: "32768"
+            value: "4096"
           - name: S3_ENDPOINT_URL
             value: http://minio-api.zelda-rl.svc.cluster.local:9000
           - name: S3_ACCESS_KEY
@@ -97,11 +107,6 @@ spec:
                 name: minio-credentials
                 key: secret-key
           - name: LLM_GATEWAY_URL
-            value: http://llm-d-gateway.zelda-rl.svc.cluster.local:8080
-        tolerations:
-        - key: pyboy-training
-          operator: Equal
-          value: "true"
-          effect: NoSchedule
-        nodeSelector:
-          node-role.kubernetes.io/pyboy-training: ""
+            value: http://openshift-ai-inference-openshift-default.openshift-ingress.svc.cluster.local
+          - name: LLM_NAMESPACE
+            value: zelda-rl

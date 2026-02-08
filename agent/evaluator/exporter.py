@@ -22,6 +22,17 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+def _sanitize(obj):
+    """Convert numpy types to native Python for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize(v) for v in obj]
+    if hasattr(obj, "item"):  # numpy scalar
+        return obj.item()
+    return obj
+
+
 @dataclass
 class FrameRecord:
     """A single frame's data for export."""
@@ -137,11 +148,11 @@ class EpisodeExporter:
         manifest = {
             "segment_id": seg.segment_id,
             "episode_id": seg.episode_id,
-            "start_step": seg.start_step,
-            "end_step": seg.end_step,
+            "start_step": int(seg.start_step),
+            "end_step": int(seg.end_step),
             "num_frames": len(seg.frames),
-            "total_reward": seg.total_reward,
-            "metadata": seg.metadata,
+            "total_reward": float(seg.total_reward),
+            "metadata": _sanitize(seg.metadata),
         }
         self._s3.upload_json(self._bucket, f"{prefix}/manifest.json", manifest)
 
@@ -149,7 +160,9 @@ class EpisodeExporter:
         lines = []
         for f in seg.frames:
             lines.append(
-                json.dumps({"step": f.step, "action": f.action, "reward": f.reward, "state": f.state})
+                json.dumps(
+                    {"step": int(f.step), "action": int(f.action), "reward": float(f.reward), "state": _sanitize(f.state)}
+                )
             )
         self._s3.upload_bytes(
             self._bucket, f"{prefix}/states.jsonl", "\n".join(lines).encode()

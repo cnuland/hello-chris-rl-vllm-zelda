@@ -1,10 +1,14 @@
-"""LLM client for llm-d inference gateway routes.
+"""LLM client for RHOAI 3 llm-d inference gateway.
 
-Routes:
-  /vision  — Qwen2.5-VL-32B (multimodal frame analysis)
-  /dialog  — Qwen2.5-7B (dialog navigation)
-  /puzzle  — Qwen2.5-32B (puzzle solving)
-  /state   — Qwen2.5-7B (state analysis, shares with dialog)
+Models are served via LLMInferenceService through the OpenShift Gateway API.
+Internal URL pattern:
+  http://<gateway-svc>/<namespace>/<model-name>/v1/chat/completions
+
+Model mapping:
+  vision — qwen25-vl-32b (multimodal frame analysis)
+  dialog — qwen25-7b     (dialog navigation)
+  puzzle — qwen25-32b    (puzzle solving)
+  state  — qwen25-7b     (state analysis, shares with dialog)
 
 Each route uses:
   - Retries with exponential backoff
@@ -27,25 +31,45 @@ import httpx
 logger = logging.getLogger(__name__)
 
 DEFAULT_GATEWAY = os.getenv(
-    "LLM_GATEWAY_URL", "http://llm-d-gateway.zelda-rl.svc.cluster.local:8080"
+    "LLM_GATEWAY_URL",
+    "http://openshift-ai-inference-openshift-default.openshift-ingress.svc.cluster.local",
 )
+DEFAULT_NAMESPACE = os.getenv("LLM_NAMESPACE", "zelda-rl")
+
+# Use direct workload service URLs for in-cluster calls (bypasses EPP,
+# avoids body-forwarding issues, lower latency for RL training).
+# Set LLM_USE_DIRECT=true to enable (default for in-cluster).
+USE_DIRECT = os.getenv("LLM_USE_DIRECT", "true").lower() in ("true", "1", "yes")
+
+# Model name → LLMInferenceService name mapping
+MODEL_ROUTES = {
+    "vision": os.getenv("LLM_VISION_MODEL", "qwen25-vl-32b"),
+    "dialog": os.getenv("LLM_DIALOG_MODEL", "qwen25-7b"),
+    "puzzle": os.getenv("LLM_PUZZLE_MODEL", "qwen25-32b"),
+    "state": os.getenv("LLM_STATE_MODEL", "qwen25-7b"),
+}
 
 
 class LLMClient:
-    """HTTP client for llm-d gateway routes."""
+    """HTTP client for RHOAI 3 llm-d inference gateway."""
 
     def __init__(
         self,
         gateway_url: str = DEFAULT_GATEWAY,
+        namespace: str = DEFAULT_NAMESPACE,
         max_retries: int = 3,
         timeout_s: float = 30.0,
         seed: int = 42,
+        use_direct: bool = USE_DIRECT,
     ):
         self._gateway = gateway_url.rstrip("/")
+        self._namespace = namespace
         self._max_retries = max_retries
         self._timeout = timeout_s
         self._seed = seed
-        self._client = httpx.Client(timeout=self._timeout)
+        self._use_direct = use_direct
+        # Direct mode uses HTTPS with self-signed certs (vLLM secure serving)
+        self._client = httpx.Client(timeout=self._timeout, verify=not use_direct)
 
     def close(self) -> None:
         self._client.close()
@@ -83,7 +107,7 @@ class LLMClient:
                 ],
             },
         ]
-        return self._call("/vision", messages, max_tokens=512, temperature=0.1)
+        return self._call("vision", messages, max_tokens=512, temperature=0.1)
 
     def dialog(self, game_state: dict[str, Any], prompt: str | None = None) -> dict[str, Any]:
         """Call /dialog route for dialog navigation.
@@ -101,7 +125,7 @@ class LLMClient:
             {"role": "system", "content": prompt},
             {"role": "user", "content": json.dumps(game_state)},
         ]
-        return self._call("/dialog", messages, max_tokens=128, temperature=0.1)
+        return self._call("dialog", messages, max_tokens=128, temperature=0.1)
 
     def puzzle(self, game_state: dict[str, Any], prompt: str | None = None) -> dict[str, Any]:
         """Call /puzzle route for puzzle solving.
@@ -119,7 +143,7 @@ class LLMClient:
             {"role": "system", "content": prompt},
             {"role": "user", "content": json.dumps(game_state)},
         ]
-        return self._call("/puzzle", messages, max_tokens=256, temperature=0.2)
+        return self._call("puzzle", messages, max_tokens=256, temperature=0.2)
 
     def state(self, game_state: dict[str, Any]) -> dict[str, Any]:
         """Call /state route for state analysis."""
@@ -130,7 +154,7 @@ class LLMClient:
             },
             {"role": "user", "content": json.dumps(game_state)},
         ]
-        return self._call("/state", messages, max_tokens=256, temperature=0.1)
+        return self._call("state", messages, max_tokens=256, temperature=0.1)
 
     # ------------------------------------------------------------------
     # Internal
@@ -146,11 +170,22 @@ class LLMClient:
         """Make an HTTP call with retries and JSON parsing.
 
         Uses OpenAI-compatible /v1/chat/completions format.
+        Direct mode: https://{model}-kserve-workload-svc.{ns}.svc:8000/v1/chat/completions
+        Gateway mode: http://{gateway}/{namespace}/{model}/v1/chat/completions
         """
-        url = f"{self._gateway}{route}/v1/chat/completions"
+        model_name = MODEL_ROUTES.get(route.lstrip("/"), route.lstrip("/"))
+        if self._use_direct:
+            url = (
+                f"https://{model_name}-kserve-workload-svc"
+                f".{self._namespace}.svc.cluster.local:8000"
+                f"/v1/chat/completions"
+            )
+        else:
+            url = f"{self._gateway}/{self._namespace}/{model_name}/v1/chat/completions"
         session_id = self._session_id(messages)
 
         payload = {
+            "model": model_name,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,

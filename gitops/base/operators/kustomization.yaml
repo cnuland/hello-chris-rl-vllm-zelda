@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- nfd-operator.yaml
+- gpu-operator.yaml
+- rhoai-operator.yaml
+- datasciencecluster.yaml
+
+labels:
+- pairs:
+    app.kubernetes.io/component: operators
+  includeSelectors: false

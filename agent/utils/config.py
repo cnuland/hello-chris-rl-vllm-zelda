@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 class EmulatorConfig(BaseModel):
     headless: bool = True
     frame_skip: int = 4
-    rom_path: str = "roms/zelda_oracle_of_seasons.gbc"
+    rom_path: str = Field(default_factory=lambda: os.getenv("ROM_PATH", "roms/zelda.gbc"))
 
 
 class ObservationConfig(BaseModel):

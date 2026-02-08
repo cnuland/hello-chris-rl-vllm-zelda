@@ -1,0 +1,6 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
+metadata:
+  name: qwen25-7b
+spec:
+  replicas: 3

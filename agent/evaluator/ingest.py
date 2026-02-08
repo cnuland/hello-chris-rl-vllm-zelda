@@ -2,13 +2,19 @@
 
 Pipeline:
   1. Read segments from MinIO.
-  2. Fan out to vision/state/rule judges via llm-d.
+  2. Fan out to vision/state/puzzle judges via llm-d gateway.
   3. Self-consistency M=3 (three passes), majority vote.
   4. Write scores.jsonl back to MinIO.
+
+Judge model mapping:
+  - state (qwen25-7b):     progress, dialog, efficiency scoring
+  - puzzle (qwen25-32b):   puzzle scoring
+  - vision (qwen25-vl-32b): novelty scoring (frame analysis)
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import statistics
@@ -46,11 +52,10 @@ class EvaluatorIngest:
     def evaluate_segment(self, segment_data: dict[str, Any]) -> dict[str, Any]:
         """Evaluate a single segment with M=3 self-consistency.
 
-        Args:
-            segment_data: Segment manifest + state data.
-
-        Returns:
-            Judge output matching SCHEMAS.md Judge Output format.
+        Uses multiple judge models:
+          - State judge (qwen25-7b) for progress, dialog, efficiency
+          - Puzzle judge (qwen25-32b) for puzzle scoring
+          - Vision judge (qwen25-vl-32b) for novelty (if frames available)
         """
         all_scores: list[dict[str, float]] = []
 
@@ -77,23 +82,59 @@ class EvaluatorIngest:
         return result
 
     def _judge_once(self, segment_data: dict[str, Any], trial: int) -> dict[str, float]:
-        """Run one judge pass over a segment."""
+        """Run one judge pass over a segment using multiple models."""
         if self._llm is None:
             return {k: 0.5 for k in SCORE_KEYS}
 
-        prompt = self._build_judge_prompt(segment_data)
+        scores = {}
+
+        # State judge: progress, dialog, efficiency
+        state_prompt = self._build_state_prompt(segment_data)
         try:
-            result = self._llm.state({"judge_prompt": prompt, "trial": trial})
+            result = self._llm.state({"judge_prompt": state_prompt, "trial": trial})
             if "scores" in result:
-                scores = result["scores"]
-                return {k: float(scores.get(k, 0.0)) for k in SCORE_KEYS}
+                for k in ["progress", "dialog", "efficiency"]:
+                    scores[k] = float(result["scores"].get(k, 0.5))
         except Exception as e:
-            logger.warning("Judge trial %d failed: %s", trial, e)
+            logger.warning("State judge trial %d failed: %s", trial, e)
 
-        return {k: 0.5 for k in SCORE_KEYS}
+        # Puzzle judge: puzzle scoring
+        puzzle_prompt = self._build_puzzle_prompt(segment_data)
+        try:
+            result = self._llm.puzzle({"judge_prompt": puzzle_prompt, "trial": trial})
+            if "scores" in result:
+                scores["puzzle"] = float(result["scores"].get("puzzle", 0.5))
+            elif "confidence" in result:
+                scores["puzzle"] = float(result.get("confidence", 0.5))
+        except Exception as e:
+            logger.warning("Puzzle judge trial %d failed: %s", trial, e)
 
-    def _build_judge_prompt(self, segment_data: dict[str, Any]) -> str:
-        """Build evaluation prompt for the judge model."""
+        # Vision judge: novelty scoring from frame analysis
+        frame_b64 = segment_data.get("frame_b64")
+        if frame_b64:
+            vision_prompt = self._build_vision_prompt(segment_data)
+            try:
+                game_state = {}
+                if segment_data.get("states"):
+                    mid = len(segment_data["states"]) // 2
+                    game_state = segment_data["states"][mid].get("state", {})
+                result = self._llm.vision(frame_b64, game_state, prompt=vision_prompt)
+                if "scores" in result:
+                    scores["novelty"] = float(result["scores"].get("novelty", 0.5))
+                elif "novelty" in result:
+                    scores["novelty"] = float(result["novelty"])
+            except Exception as e:
+                logger.warning("Vision judge trial %d failed: %s", trial, e)
+
+        # Fill defaults for any missing scores
+        for k in SCORE_KEYS:
+            if k not in scores:
+                scores[k] = 0.5
+
+        return scores
+
+    def _build_state_prompt(self, segment_data: dict[str, Any]) -> str:
+        """Build evaluation prompt for the state judge model."""
         states = segment_data.get("states", [])
         summary = f"Segment {segment_data.get('segment_id', '?')}: "
         summary += f"{len(states)} frames, "
@@ -103,12 +144,65 @@ class EvaluatorIngest:
             first = states[0].get("state", {})
             last = states[-1].get("state", {})
             summary += f"Start room={first.get('room_id', '?')}, "
-            summary += f"End room={last.get('room_id', '?')}."
+            summary += f"End room={last.get('room_id', '?')}. "
+
+            # Compute some metrics
+            rooms = set()
+            dialogs = 0
+            for s in states:
+                st = s.get("state", {})
+                rooms.add(st.get("room_id", 0))
+                if st.get("dialog_active"):
+                    dialogs += 1
+            summary += f"Unique rooms visited: {len(rooms)}. "
+            summary += f"Dialog interactions: {dialogs}."
 
         return (
-            f"Rate this game segment on: progress, dialog, puzzle, novelty, efficiency. "
-            f"Each 0.0-1.0. {summary} "
-            f"Output JSON: {{scores: {{progress, dialog, puzzle, novelty, efficiency}}, rationale: str}}"
+            f"Rate this Zelda game segment on: progress, dialog, efficiency. "
+            f"Each score 0.0-1.0. {summary} "
+            f"Output JSON: {{\"scores\": {{\"progress\": float, \"dialog\": float, \"efficiency\": float}}}}"
+        )
+
+    def _build_puzzle_prompt(self, segment_data: dict[str, Any]) -> str:
+        """Build evaluation prompt for the puzzle judge model."""
+        states = segment_data.get("states", [])
+        summary = f"Segment {segment_data.get('segment_id', '?')}: "
+        summary += f"{len(states)} frames. "
+
+        if states:
+            puzzle_flags = set()
+            for s in states:
+                st = s.get("state", {})
+                pf = st.get("puzzle_flags", 0)
+                if pf:
+                    puzzle_flags.add(pf)
+            summary += f"Puzzle flag changes: {len(puzzle_flags)}."
+
+        return (
+            f"Rate this Zelda game segment on puzzle-solving skill. "
+            f"Score 0.0-1.0. {summary} "
+            f"Output JSON: {{\"scores\": {{\"puzzle\": float}}, \"rationale\": str}}"
+        )
+
+    def _build_vision_prompt(self, segment_data: dict[str, Any]) -> str:
+        """Build evaluation prompt for the vision judge model."""
+        states = segment_data.get("states", [])
+        summary = f"Segment {segment_data.get('segment_id', '?')}: "
+        summary += f"{len(states)} frames. "
+
+        if states:
+            rooms = set()
+            for s in states:
+                rooms.add(s.get("state", {}).get("room_id", 0))
+            summary += f"Rooms visited: {len(rooms)}. "
+            summary += f"Total reward: {segment_data.get('total_reward', 0):.1f}."
+
+        return (
+            f"Analyze this Zelda game screenshot for novelty and exploration. "
+            f"Rate how novel/interesting the game state is on a 0.0-1.0 scale. "
+            f"Consider: new areas explored, unique enemy encounters, items found, "
+            f"environmental variety. {summary} "
+            f'Output JSON: {{"scores": {{"novelty": float}}, "rationale": str}}'
         )
 
     @staticmethod
@@ -128,6 +222,18 @@ class EvaluatorIngest:
                     states_raw = self._s3.download_bytes(self._bucket, f"{key}/states.jsonl")
                     states = [json.loads(line) for line in states_raw.decode().strip().split("\n")]
                     manifest["states"] = states
+
+                    # Download a representative frame PNG for the vision judge
+                    frame_keys = [
+                        k for k in self._s3.list_keys(self._bucket, prefix=f"{key}/frames/")
+                        if k.endswith(".png")
+                    ]
+                    if frame_keys:
+                        # Pick middle frame for best representation
+                        mid_frame = frame_keys[len(frame_keys) // 2]
+                        png_bytes = self._s3.download_bytes(self._bucket, mid_frame)
+                        manifest["frame_b64"] = base64.b64encode(png_bytes).decode("ascii")
+                        logger.info("Loaded frame %s for vision judge", mid_frame)
                 else:
                     manifest = {"segment_id": key}
 

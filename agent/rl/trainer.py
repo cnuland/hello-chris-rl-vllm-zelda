@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def make_env_config(
-    rom_path: str = "roms/zelda_oracle_of_seasons.gbc",
+    rom_path: str = "roms/zelda.gbc",
     headless: bool = True,
     frame_skip: int = 4,
     max_steps: int = 30_000,
@@ -65,6 +65,8 @@ def create_ppo_config(
         .env_runners(
             num_env_runners=n_workers,
             num_envs_per_env_runner=n_envs,
+            rollout_fragment_length=200,
+            sample_timeout_s=300.0,
         )
         .training(
             model={
@@ -78,7 +80,7 @@ def create_ppo_config(
             vf_clip_param=10.0,
             entropy_coeff=0.01,
             train_batch_size_per_learner=bs,
-            minibatch_size=512,
+            minibatch_size=min(bs, 512),
             num_epochs=10,
         )
         .resources(num_gpus=0)

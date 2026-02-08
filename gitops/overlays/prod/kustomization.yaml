@@ -5,9 +5,8 @@ namespace: zelda-rl
 
 resources:
 - ../../base
-- machinesets/llm-inference-machineset.yaml
-- machinesets/pyboy-training-machineset.yaml
 
 patches:
-- path: patches/llm-replicas.yaml
-- path: patches/training-scale.yaml
+- path: patches/llm-replicas-vision.yaml
+- path: patches/llm-replicas-puzzle.yaml
+- path: patches/llm-replicas-text.yaml

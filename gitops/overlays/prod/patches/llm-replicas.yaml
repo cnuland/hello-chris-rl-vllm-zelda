@@ -1,27 +1,21 @@
-# Prod: 3+ LLM replicas, full model sizes, TP=2 for 32B models
-apiVersion: serving.kserve.io/v1beta1
-kind: InferenceService
+# Prod: 3 LLM replicas per model with full-size models
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
 metadata:
   name: qwen25-vl-32b
 spec:
-  predictor:
-    minReplicas: 2
-    maxReplicas: 4
+  replicas: 3
 ---
-apiVersion: serving.kserve.io/v1beta1
-kind: InferenceService
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
 metadata:
   name: qwen25-32b
 spec:
-  predictor:
-    minReplicas: 2
-    maxReplicas: 4
+  replicas: 3
 ---
-apiVersion: serving.kserve.io/v1beta1
-kind: InferenceService
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
 metadata:
   name: qwen25-7b
 spec:
-  predictor:
-    minReplicas: 2
-    maxReplicas: 4
+  replicas: 3

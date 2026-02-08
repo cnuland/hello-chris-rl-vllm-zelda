@@ -31,7 +31,7 @@ spec:
     spec:
       project: zelda-rl
       source:
-        repoURL: https://github.com/cnuland/hello-chris-rl-vllm-zelda.git
+        repoURL: https://github.com/cnuland/hello-chris-rl-zelda.git
         targetRevision: "{{.revision}}"
         path: "gitops/overlays/{{.env}}"
       destination:

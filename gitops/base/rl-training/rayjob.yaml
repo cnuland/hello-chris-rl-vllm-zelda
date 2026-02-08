@@ -1,12 +1,13 @@
 apiVersion: ray.io/v1
 kind: RayJob
 metadata:
-  name: zelda-rl-training-burst
+  name: zelda-rl-epoch-orchestrator
   labels:
     app.kubernetes.io/part-of: zelda-rl
     app.kubernetes.io/component: rl-training
+    zelda-rl/phase: orchestrator
 spec:
-  entrypoint: python scripts/run_rollouts.py
+  entrypoint: python scripts/run_epoch.py
   runtimeEnvYAML: |
     pip:
       - boto3>=1.28.0
@@ -15,13 +16,21 @@ spec:
       - PyYAML>=6.0
       - httpx>=0.25.0
       - pydantic>=2.0.0
+      - torch>=2.0.0
     working_dir: "."
     excludes:
       - "old/"
       - "new/"
       - "*.ipynb"
       - "*.md"
-  shutdownAfterJobFinishes: true
-  ttlSecondsAfterFinished: 300
+    env_vars:
+      MAX_EPOCHS: "100"
+      START_EPOCH: "0"
+      RAY_WORKERS: "10"
+      EPISODE_LENGTH: "30000"
+      LLM_GATEWAY_URL: "http://openshift-ai-inference-openshift-default.openshift-ingress.svc.cluster.local"
+      LLM_NAMESPACE: "zelda-rl"
+  shutdownAfterJobFinishes: false
+  ttlSecondsAfterFinished: 3600
   clusterSelector:
-    ray.io/cluster: zelda-rl
+    app.kubernetes.io/part-of: zelda-rl

@@ -6,6 +6,7 @@ and RAM taps for room_id, tile_x/y, dialog flags, OAM presence.
 
 from __future__ import annotations
 
+import io
 import logging
 from enum import IntEnum
 from typing import Any
@@ -81,7 +82,7 @@ class ZeldaEnv(gym.Env):
         self._headless = headless
         self.frame_skip = frame_skip
         self.max_steps = max_steps
-        self._save_state_path = save_state_path
+        self._save_state_path = save_state_path or None
         self.render_mode = render_mode
         self._seed = seed
 
@@ -115,17 +116,22 @@ class ZeldaEnv(gym.Env):
                 "pyboy is required: pip install pyboy>=2.6.0"
             ) from exc
 
+        # Suppress PyBoy sound buffer overrun spam
+        logging.getLogger("pyboy.core.sound").setLevel(logging.CRITICAL + 1)
+        logging.getLogger("pyboy").setLevel(logging.WARNING)
+
         window = "null" if self._headless else "SDL2"
-        self._pyboy = PyBoy(self.rom_path, window=window)
+        self._pyboy = PyBoy(self.rom_path, window=window, sound_emulated=False)
         # Tick a few frames to get past the boot logo
         for _ in range(300):
-            self._pyboy.tick()
+            self._pyboy.tick(count=1, render=not self._headless)
         # Capture initial state for deterministic resets
         if self._save_state_path:
             with open(self._save_state_path, "rb") as f:
-                state_data = f.read()
-            self._pyboy.load_state(state_data)
-        self._initial_state = self._pyboy.save_state()
+                self._pyboy.load_state(f)
+        buf = io.BytesIO()
+        self._pyboy.save_state(buf)
+        self._initial_state = buf.getvalue()
 
     # ------------------------------------------------------------------
     # RAM helpers
@@ -212,7 +218,7 @@ class ZeldaEnv(gym.Env):
 
         # Deterministic reload from saved state
         if self._initial_state is not None:
-            self._pyboy.load_state(self._initial_state)
+            self._pyboy.load_state(io.BytesIO(self._initial_state))
 
         self.step_count = 0
         self.episode_count += 1
@@ -272,7 +278,11 @@ class ZeldaEnv(gym.Env):
 
     def render(self):
         if self.render_mode == "rgb_array" and self._pyboy is not None:
-            return np.array(self._pyboy.screen.ndarray)
+            frame = np.array(self._pyboy.screen.ndarray)
+            # PyBoy returns RGBA (144, 160, 4); convert to RGB
+            if frame.ndim == 3 and frame.shape[2] == 4:
+                frame = frame[:, :, :3]
+            return frame
         return None
 
     def close(self):
