@@ -30,31 +30,19 @@ class ZeldaAction(IntEnum):
     B = 6
     START = 7
 
-
-# PyBoy button name mapping
-_PYBOY_BUTTONS = {
-    ZeldaAction.NOP: None,
-    ZeldaAction.UP: "up",
-    ZeldaAction.DOWN: "down",
-    ZeldaAction.LEFT: "left",
-    ZeldaAction.RIGHT: "right",
-    ZeldaAction.A: "a",
-    ZeldaAction.B: "b",
-    ZeldaAction.START: "start",
-}
-
-# RAM addresses — Data Crystal confirmed
-_PLAYER_X = 0xC4AC
-_PLAYER_Y = 0xC4AD
-_PLAYER_DIR = 0xC4AE
-_PLAYER_ROOM = 0xC63B
-_HEALTH = 0xC021  # quarter-hearts
-_MAX_HEALTH = 0xC022
-_DIALOG_STATE = 0xC2EF
-_DUNGEON_FLOOR = 0xC63D
-_DEATH_COUNT = 0xC61E  # 2 bytes LE
+# RAM addresses — oracles-disasm confirmed (Seasons-specific)
+# Link object struct at w1Link = $D000, SpecialObjectStruct layout
+_PLAYER_X = 0xD00D       # w1Link + $0D (xh - pixel X)
+_PLAYER_Y = 0xD00B       # w1Link + $0B (yh - pixel Y)
+_PLAYER_DIR = 0xD008     # w1Link + $08 (direction)
+_PLAYER_ROOM = 0xCC4C    # wActiveRoom (Seasons)
+_HEALTH = 0xC6A2         # wLinkHealth (Seasons) — quarter-hearts
+_MAX_HEALTH = 0xC6A3     # wLinkMaxHealth (Seasons)
+_DIALOG_STATE = 0xCBA0   # wTextIsActive (0 = no text)
+_DUNGEON_FLOOR = 0xCC57  # wDungeonFloor (Seasons)
+_DEATH_COUNT = 0xC61E    # 2 bytes LE
 _PUZZLE_FLAGS = 0xC6C0
-_SCREEN_TRANSITION = 0xC2F1
+_SCREEN_TRANSITION = 0xCD00  # wScrollMode
 _LOADING = 0xC2F2
 
 
@@ -100,6 +88,11 @@ class ZeldaEnv(gym.Env):
         self.step_count = 0
         self.episode_count = 0
         self._initial_deaths = 0
+        self._last_action: ZeldaAction | None = None
+
+        # WindowEvent mappings (proven to work with PyBoy)
+        self._press_events: dict[ZeldaAction, Any] = {}
+        self._release_events: dict[ZeldaAction, Any] = {}
 
     # ------------------------------------------------------------------
     # PyBoy lifecycle
@@ -111,10 +104,32 @@ class ZeldaEnv(gym.Env):
             return
         try:
             from pyboy import PyBoy
+            from pyboy.utils import WindowEvent
         except ImportError as exc:
             raise ImportError(
                 "pyboy is required: pip install pyboy>=2.6.0"
             ) from exc
+
+        # Build WindowEvent mappings (same approach as proven old version)
+        self._press_events = {
+            ZeldaAction.NOP: None,
+            ZeldaAction.UP: WindowEvent.PRESS_ARROW_UP,
+            ZeldaAction.DOWN: WindowEvent.PRESS_ARROW_DOWN,
+            ZeldaAction.LEFT: WindowEvent.PRESS_ARROW_LEFT,
+            ZeldaAction.RIGHT: WindowEvent.PRESS_ARROW_RIGHT,
+            ZeldaAction.A: WindowEvent.PRESS_BUTTON_A,
+            ZeldaAction.B: WindowEvent.PRESS_BUTTON_B,
+            ZeldaAction.START: WindowEvent.PRESS_BUTTON_START,
+        }
+        self._release_events = {
+            ZeldaAction.UP: WindowEvent.RELEASE_ARROW_UP,
+            ZeldaAction.DOWN: WindowEvent.RELEASE_ARROW_DOWN,
+            ZeldaAction.LEFT: WindowEvent.RELEASE_ARROW_LEFT,
+            ZeldaAction.RIGHT: WindowEvent.RELEASE_ARROW_RIGHT,
+            ZeldaAction.A: WindowEvent.RELEASE_BUTTON_A,
+            ZeldaAction.B: WindowEvent.RELEASE_BUTTON_B,
+            ZeldaAction.START: WindowEvent.RELEASE_BUTTON_START,
+        }
 
         # Suppress PyBoy sound buffer overrun spam
         logging.getLogger("pyboy.core.sound").setLevel(logging.CRITICAL + 1)
@@ -122,13 +137,14 @@ class ZeldaEnv(gym.Env):
 
         window = "null" if self._headless else "SDL2"
         self._pyboy = PyBoy(self.rom_path, window=window, sound_emulated=False)
-        # Tick a few frames to get past the boot logo
-        for _ in range(300):
-            self._pyboy.tick(count=1, render=not self._headless)
-        # Capture initial state for deterministic resets
+        # Tick frames to get past the boot logo
+        for _ in range(1000):
+            self._pyboy.tick()
+        # Load save state if provided
         if self._save_state_path:
             with open(self._save_state_path, "rb") as f:
                 self._pyboy.load_state(f)
+        # Capture initial state for deterministic resets
         buf = io.BytesIO()
         self._pyboy.save_state(buf)
         self._initial_state = buf.getvalue()
@@ -223,6 +239,7 @@ class ZeldaEnv(gym.Env):
         self.step_count = 0
         self.episode_count += 1
         self._initial_deaths = self._read16(_DEATH_COUNT)
+        self._last_action = None
 
         obs = self._get_obs()
         info = self._get_info()
@@ -230,15 +247,23 @@ class ZeldaEnv(gym.Env):
 
     def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         act = ZeldaAction(action)
-        btn = _PYBOY_BUTTONS[act]
 
-        # Press button and tick for frame_skip frames
-        if btn is not None:
-            self._pyboy.button(btn)
+        # Release previous button first (matches proven old version)
+        if self._last_action is not None and self._last_action != ZeldaAction.NOP:
+            release_event = self._release_events.get(self._last_action)
+            if release_event:
+                self._pyboy.send_input(release_event)
+
+        # Press new button via WindowEvent
+        press_event = self._press_events.get(act)
+        if press_event:
+            self._pyboy.send_input(press_event)
+
+        # Advance emulator (bare tick like old version)
         for _ in range(self.frame_skip):
-            self._pyboy.tick(count=1, render=not self._headless)
-        if btn is not None:
-            self._pyboy.button_release(btn)
+            self._pyboy.tick()
+
+        self._last_action = act
 
         self.step_count += 1
         obs = self._get_obs()
@@ -287,5 +312,8 @@ class ZeldaEnv(gym.Env):
 
     def close(self):
         if self._pyboy is not None:
-            self._pyboy.stop()
+            try:
+                self._pyboy.stop(save=False)
+            except Exception:
+                pass
             self._pyboy = None

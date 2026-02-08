@@ -192,8 +192,12 @@ def run_training_epoch(
     return metadata
 
 
-def run_evaluation(epoch: int, s3: S3Client) -> list[dict]:
-    """Run LLM judge evaluation on all available segments. Returns scored results."""
+def run_evaluation(epoch: int, s3: S3Client, scored_ids: set[str] | None = None) -> list[dict]:
+    """Run LLM judge evaluation on NEW segments only. Returns scored results."""
+    import random
+
+    max_eval = int(os.getenv("MAX_EVAL_SEGMENTS", "200"))
+
     logger.info("=" * 60)
     logger.info("EVALUATION EPOCH %d", epoch)
     logger.info("=" * 60)
@@ -207,20 +211,29 @@ def run_evaluation(epoch: int, s3: S3Client) -> list[dict]:
         consistency_m=3,
     )
 
-    # List all segments
+    # List all segments, skip already-scored ones
+    if scored_ids is None:
+        scored_ids = set()
     all_keys = s3.list_keys("zelda-episodes", prefix="")
     segment_keys = []
     for key in all_keys:
         if key.endswith("/manifest.json") and not key.startswith("scores/"):
             segment_prefix = key.rsplit("/manifest.json", 1)[0]
-            segment_keys.append(segment_prefix)
+            seg_id = segment_prefix.split("/")[-1] if "/" in segment_prefix else segment_prefix
+            if seg_id not in scored_ids:
+                segment_keys.append(segment_prefix)
 
     if not segment_keys:
-        logger.warning("No segments found for evaluation")
+        logger.warning("No new segments found for evaluation")
         llm.close()
         return []
 
-    logger.info("Found %d segments to evaluate", len(segment_keys))
+    # Cap at max_eval to keep eval phase fast
+    if len(segment_keys) > max_eval:
+        logger.info("Sampling %d of %d new segments", max_eval, len(segment_keys))
+        segment_keys = random.sample(segment_keys, max_eval)
+
+    logger.info("Found %d new segments to evaluate (max %d)", len(segment_keys), max_eval)
 
     results = evaluator.batch_evaluate(segment_keys)
     logger.info("Evaluated %d segments", len(results))
@@ -320,6 +333,7 @@ def main():
     epoch = 0
     total_timesteps = 0
     reward_history = []
+    scored_segment_ids: set[str] = set()
 
     while datetime.now() < deadline:
         remaining = (deadline - datetime.now()).total_seconds()
@@ -364,7 +378,10 @@ def main():
                 logger.info("Not enough time for evaluation. Skipping.")
             else:
                 try:
-                    run_evaluation(epoch, s3)
+                    eval_results = run_evaluation(epoch, s3, scored_ids=scored_segment_ids)
+                    for r in eval_results:
+                        scored_segment_ids.add(r.get("segment_id", ""))
+                    logger.info("Total scored segments: %d", len(scored_segment_ids))
                 except Exception as e:
                     logger.error("Evaluation epoch %d failed: %s", epoch, e)
 

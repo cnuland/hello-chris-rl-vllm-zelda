@@ -18,6 +18,7 @@ import base64
 import json
 import logging
 import statistics
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -82,49 +83,60 @@ class EvaluatorIngest:
         return result
 
     def _judge_once(self, segment_data: dict[str, Any], trial: int) -> dict[str, float]:
-        """Run one judge pass over a segment using multiple models."""
+        """Run one judge pass over a segment using multiple models in parallel."""
         if self._llm is None:
             return {k: 0.5 for k in SCORE_KEYS}
 
         scores = {}
 
-        # State judge: progress, dialog, efficiency
-        state_prompt = self._build_state_prompt(segment_data)
-        try:
+        def _call_state():
+            state_prompt = self._build_state_prompt(segment_data)
             result = self._llm.state({"judge_prompt": state_prompt, "trial": trial})
+            partial = {}
             if "scores" in result:
                 for k in ["progress", "dialog", "efficiency"]:
-                    scores[k] = float(result["scores"].get(k, 0.5))
-        except Exception as e:
-            logger.warning("State judge trial %d failed: %s", trial, e)
+                    partial[k] = float(result["scores"].get(k, 0.5))
+            return partial
 
-        # Puzzle judge: puzzle scoring
-        puzzle_prompt = self._build_puzzle_prompt(segment_data)
-        try:
+        def _call_puzzle():
+            puzzle_prompt = self._build_puzzle_prompt(segment_data)
             result = self._llm.puzzle({"judge_prompt": puzzle_prompt, "trial": trial})
             if "scores" in result:
-                scores["puzzle"] = float(result["scores"].get("puzzle", 0.5))
+                return {"puzzle": float(result["scores"].get("puzzle", 0.5))}
             elif "confidence" in result:
-                scores["puzzle"] = float(result.get("confidence", 0.5))
-        except Exception as e:
-            logger.warning("Puzzle judge trial %d failed: %s", trial, e)
+                return {"puzzle": float(result.get("confidence", 0.5))}
+            return {}
 
-        # Vision judge: novelty scoring from frame analysis
-        frame_b64 = segment_data.get("frame_b64")
-        if frame_b64:
+        def _call_vision():
+            frame_b64 = segment_data.get("frame_b64")
+            if not frame_b64:
+                return {}
             vision_prompt = self._build_vision_prompt(segment_data)
-            try:
-                game_state = {}
-                if segment_data.get("states"):
-                    mid = len(segment_data["states"]) // 2
-                    game_state = segment_data["states"][mid].get("state", {})
-                result = self._llm.vision(frame_b64, game_state, prompt=vision_prompt)
-                if "scores" in result:
-                    scores["novelty"] = float(result["scores"].get("novelty", 0.5))
-                elif "novelty" in result:
-                    scores["novelty"] = float(result["novelty"])
-            except Exception as e:
-                logger.warning("Vision judge trial %d failed: %s", trial, e)
+            game_state = {}
+            if segment_data.get("states"):
+                mid = len(segment_data["states"]) // 2
+                game_state = segment_data["states"][mid].get("state", {})
+            result = self._llm.vision(frame_b64, game_state, prompt=vision_prompt)
+            if "scores" in result:
+                return {"novelty": float(result["scores"].get("novelty", 0.5))}
+            elif "novelty" in result:
+                return {"novelty": float(result["novelty"])}
+            return {}
+
+        # Run all 3 judges in parallel
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {
+                pool.submit(_call_state): "state",
+                pool.submit(_call_puzzle): "puzzle",
+                pool.submit(_call_vision): "vision",
+            }
+            for fut in as_completed(futures):
+                judge_name = futures[fut]
+                try:
+                    partial = fut.result()
+                    scores.update(partial)
+                except Exception as e:
+                    logger.warning("%s judge trial %d failed: %s", judge_name, trial, e)
 
         # Fill defaults for any missing scores
         for k in SCORE_KEYS:
@@ -212,35 +224,46 @@ class EvaluatorIngest:
         worst = min(scores, key=scores.get)
         return f"Best: {best} ({scores[best]:.2f}), Weakest: {worst} ({scores[worst]:.2f})"
 
-    def batch_evaluate(self, segment_keys: list[str]) -> list[dict[str, Any]]:
-        """Evaluate multiple segments and return all results."""
+    def _load_and_evaluate(self, key: str) -> dict[str, Any] | None:
+        """Load a single segment from S3 and evaluate it."""
+        try:
+            if self._s3:
+                manifest = self._s3.download_json(self._bucket, f"{key}/manifest.json")
+                states_raw = self._s3.download_bytes(self._bucket, f"{key}/states.jsonl")
+                states = [json.loads(line) for line in states_raw.decode().strip().split("\n")]
+                manifest["states"] = states
+
+                # Download a representative frame PNG for the vision judge
+                frame_keys = [
+                    k for k in self._s3.list_keys(self._bucket, prefix=f"{key}/frames/")
+                    if k.endswith(".png")
+                ]
+                if frame_keys:
+                    mid_frame = frame_keys[len(frame_keys) // 2]
+                    png_bytes = self._s3.download_bytes(self._bucket, mid_frame)
+                    manifest["frame_b64"] = base64.b64encode(png_bytes).decode("ascii")
+                    logger.info("Loaded frame %s for vision judge", mid_frame)
+            else:
+                manifest = {"segment_id": key}
+
+            return self.evaluate_segment(manifest)
+        except Exception as e:
+            logger.error("Failed to evaluate segment %s: %s", key, e)
+            return None
+
+    def batch_evaluate(self, segment_keys: list[str], max_workers: int = 4) -> list[dict[str, Any]]:
+        """Evaluate multiple segments in parallel and return all results."""
         results = []
-        for key in segment_keys:
-            try:
-                if self._s3:
-                    manifest = self._s3.download_json(self._bucket, f"{key}/manifest.json")
-                    states_raw = self._s3.download_bytes(self._bucket, f"{key}/states.jsonl")
-                    states = [json.loads(line) for line in states_raw.decode().strip().split("\n")]
-                    manifest["states"] = states
-
-                    # Download a representative frame PNG for the vision judge
-                    frame_keys = [
-                        k for k in self._s3.list_keys(self._bucket, prefix=f"{key}/frames/")
-                        if k.endswith(".png")
-                    ]
-                    if frame_keys:
-                        # Pick middle frame for best representation
-                        mid_frame = frame_keys[len(frame_keys) // 2]
-                        png_bytes = self._s3.download_bytes(self._bucket, mid_frame)
-                        manifest["frame_b64"] = base64.b64encode(png_bytes).decode("ascii")
-                        logger.info("Loaded frame %s for vision judge", mid_frame)
-                else:
-                    manifest = {"segment_id": key}
-
-                result = self.evaluate_segment(manifest)
-                results.append(result)
-            except Exception as e:
-                logger.error("Failed to evaluate segment %s: %s", key, e)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(self._load_and_evaluate, key): key for key in segment_keys}
+            done = 0
+            for fut in as_completed(futures):
+                done += 1
+                result = fut.result()
+                if result is not None:
+                    results.append(result)
+                if done % 20 == 0:
+                    logger.info("Evaluated %d/%d segments...", done, len(segment_keys))
 
         return results
 

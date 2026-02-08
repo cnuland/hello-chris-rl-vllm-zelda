@@ -41,6 +41,8 @@ from agent.env.ram_addresses import (
     OVERWORLD_POSITION,
     PEGASUS_SEEDS,
     PLAYER_DIRECTION,
+    PLAYER_HEALTH,
+    PLAYER_MAX_HEALTH,
     PLAYER_ROOM,
     PLAYER_X,
     PLAYER_Y,
@@ -85,8 +87,8 @@ def encode_vector(env: ZeldaEnv) -> np.ndarray:
     idx += 4
 
     # --- Health (3) ---
-    health_raw = r(0xC021)
-    max_health_raw = r(0xC022)
+    health_raw = r(PLAYER_HEALTH)
+    max_health_raw = r(PLAYER_MAX_HEALTH)
     v[idx] = (health_raw / 4) / 20.0
     v[idx + 1] = (max_health_raw / 4) / 20.0
     v[idx + 2] = (health_raw / max(max_health_raw, 1))  # health ratio
@@ -175,8 +177,8 @@ def encode_json(env: ZeldaEnv) -> dict[str, Any]:
             "x": r(PLAYER_X),
             "y": r(PLAYER_Y),
             "dir": DIRECTIONS.get(r(PLAYER_DIRECTION), "unknown"),
-            "hp": r(0xC021) // 4,
-            "max_hp": r(0xC022) // 4,
+            "hp": r(PLAYER_HEALTH) // 4,
+            "max_hp": r(PLAYER_MAX_HEALTH) // 4,
         },
         "room_id": r(PLAYER_ROOM),
         "inventory": {

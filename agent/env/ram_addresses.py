@@ -1,16 +1,18 @@
-"""Oracle of Seasons RAM addresses — Data Crystal confirmed.
+"""Oracle of Seasons RAM addresses — oracles-disasm confirmed.
 
-Reference: https://datacrystal.tcrf.net/wiki/The_Legend_of_Zelda:_Oracle_of_Seasons/RAM_map
+Reference: https://github.com/Drenn1/oracles-disasm
+Link object struct at w1Link = $D000, SpecialObjectStruct layout.
+When two addresses are listed in disasm, format is Ages/Seasons.
 """
 
-# --- Player ---
-PLAYER_X = 0xC4AC
-PLAYER_Y = 0xC4AD
-PLAYER_DIRECTION = 0xC4AE  # 0=up, 1=right, 2=down, 3=left
-PLAYER_ROOM = 0xC63B
-PLAYER_HEALTH = 0xC021  # Quarter-hearts (4 per heart)
-PLAYER_MAX_HEALTH = 0xC022
-HEART_PIECES = 0xC628
+# --- Player (w1Link struct at $D000) ---
+PLAYER_X = 0xD00D          # w1Link + $0D (xh - pixel X)
+PLAYER_Y = 0xD00B          # w1Link + $0B (yh - pixel Y)
+PLAYER_DIRECTION = 0xD008  # w1Link + $08 (direction: 0=up, 1=right, 2=down, 3=left)
+PLAYER_ROOM = 0xCC4C       # wActiveRoom (Seasons)
+PLAYER_HEALTH = 0xC6A2     # wLinkHealth (Seasons) — quarter-hearts
+PLAYER_MAX_HEALTH = 0xC6A3 # wLinkMaxHealth (Seasons)
+HEART_PIECES = 0xC6A4      # wNumHeartPieces
 
 # --- Resources ---
 RUPEES = 0xC6A5  # 2 bytes, little-endian
@@ -54,15 +56,15 @@ RUPEES_COLLECTED = 0xC6B2  # 2 bytes
 # --- World ---
 CURRENT_LEVEL_BANK = 0xC63A
 OVERWORLD_POSITION = 0xC63C
-DUNGEON_POSITION = 0xC63D
-DUNGEON_FLOOR = 0xC63E
+DUNGEON_POSITION = 0xCC56   # wDungeonMapPosition
+DUNGEON_FLOOR = 0xCC57      # wDungeonFloor (Seasons)
 MAPLE_COUNTER = 0xC6B4
 ENEMIES_ON_SCREEN = 0xCC30
 
 # --- Dialog / UI ---
-DIALOG_STATE = 0xC2EF  # Nonzero = dialog active
+DIALOG_STATE = 0xCBA0    # wTextIsActive (0 = no text)
 MENU_STATE = 0xC2F0
-SCREEN_TRANSITION = 0xC2F1
+SCREEN_TRANSITION = 0xCD00  # wScrollMode
 LOADING_SCREEN = 0xC2F2
 
 # --- Season ---
