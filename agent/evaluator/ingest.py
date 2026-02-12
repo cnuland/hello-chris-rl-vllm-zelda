@@ -44,11 +44,22 @@ class EvaluatorIngest:
         s3_client: Any = None,
         episodes_bucket: str = "zelda-episodes",
         consistency_m: int = 3,
+        walkthrough_path: str | None = None,
     ):
         self._llm = llm_client
         self._s3 = s3_client
         self._bucket = episodes_bucket
         self._m = consistency_m
+
+        # Load game walkthrough for judge context
+        self._walkthrough = ""
+        if walkthrough_path:
+            try:
+                with open(walkthrough_path) as f:
+                    self._walkthrough = f.read()
+                logger.info("Loaded walkthrough (%d chars) from %s", len(self._walkthrough), walkthrough_path)
+            except Exception as e:
+                logger.warning("Could not load walkthrough: %s", e)
 
     def evaluate_segment(self, segment_data: dict[str, Any]) -> dict[str, Any]:
         """Evaluate a single segment with M=3 self-consistency.
@@ -167,10 +178,33 @@ class EvaluatorIngest:
                 if st.get("dialog_active"):
                     dialogs += 1
             summary += f"Unique rooms visited: {len(rooms)}. "
-            summary += f"Dialog interactions: {dialogs}."
+            summary += f"Dialog interactions: {dialogs}. "
+
+            # Add context about the area
+            active_group = last.get("active_group", 0)
+            if active_group in (4, 5):
+                summary += "Agent is inside a DUNGEON. "
+            elif active_group == 2:
+                summary += "Agent is at the MAKU TREE (key story location). "
+            else:
+                summary += "Agent is in the OVERWORLD. "
+            summary += f"Health: {last.get('health', '?')}/{last.get('max_health', '?')}. "
+
+        context = ""
+        if self._walkthrough:
+            context = (
+                "You are an expert on Zelda: Oracle of Seasons. Use this game guide "
+                "to evaluate the agent's progress accurately:\n\n"
+                f"{self._walkthrough}\n\n"
+            )
 
         return (
-            f"Rate this Zelda game segment on: progress, dialog, efficiency. "
+            f"{context}"
+            f"Rate this Zelda: Oracle of Seasons gameplay segment on: progress, dialog, efficiency. "
+            f"progress: How much the agent advances toward the next quest milestone (finding dungeons, "
+            f"talking to key NPCs like the Maku Tree, collecting essences). "
+            f"dialog: Quality of NPC dialog interactions (talking to the right NPCs, advancing story). "
+            f"efficiency: Steps used productively vs wasted (backtracking, standing still). "
             f"Each score 0.0-1.0. {summary} "
             f"Output JSON: {{\"scores\": {{\"progress\": float, \"dialog\": float, \"efficiency\": float}}}}"
         )
@@ -188,11 +222,27 @@ class EvaluatorIngest:
                 pf = st.get("puzzle_flags", 0)
                 if pf:
                     puzzle_flags.add(pf)
-            summary += f"Puzzle flag changes: {len(puzzle_flags)}."
+            summary += f"Puzzle flag changes: {len(puzzle_flags)}. "
+
+            # Add dungeon context
+            last = states[-1].get("state", {})
+            if last.get("active_group", 0) in (4, 5):
+                summary += f"Currently in dungeon (floor {last.get('dungeon_floor', 0)}). "
+
+        context = ""
+        if self._walkthrough:
+            context = (
+                "You are an expert on Zelda: Oracle of Seasons puzzle mechanics. "
+                "Use this guide for context:\n\n"
+                f"{self._walkthrough}\n\n"
+            )
 
         return (
-            f"Rate this Zelda game segment on puzzle-solving skill. "
-            f"Score 0.0-1.0. {summary} "
+            f"{context}"
+            f"Rate this Zelda: Oracle of Seasons segment on puzzle-solving. "
+            f"Puzzles include: pushing blocks, hitting switches, using season changes to open paths, "
+            f"navigating dungeon rooms, finding keys and boss keys. "
+            f"Score 0.0-1.0 (0=no puzzle progress, 1=solved complex puzzle). {summary} "
             f"Output JSON: {{\"scores\": {{\"puzzle\": float}}, \"rationale\": str}}"
         )
 
@@ -207,13 +257,29 @@ class EvaluatorIngest:
             for s in states:
                 rooms.add(s.get("state", {}).get("room_id", 0))
             summary += f"Rooms visited: {len(rooms)}. "
-            summary += f"Total reward: {segment_data.get('total_reward', 0):.1f}."
+            summary += f"Total reward: {segment_data.get('total_reward', 0):.1f}. "
+
+            last = states[-1].get("state", {})
+            if last.get("active_group", 0) in (4, 5):
+                summary += "This is a DUNGEON screenshot. "
+            else:
+                summary += "This is an OVERWORLD screenshot. "
+
+        context = ""
+        if self._walkthrough:
+            context = (
+                "You are evaluating a Zelda: Oracle of Seasons gameplay screenshot. "
+                "Use this game guide for context:\n\n"
+                f"{self._walkthrough}\n\n"
+            )
 
         return (
-            f"Analyze this Zelda game screenshot for novelty and exploration. "
+            f"{context}"
+            f"Analyze this Zelda: Oracle of Seasons screenshot for novelty and exploration. "
             f"Rate how novel/interesting the game state is on a 0.0-1.0 scale. "
-            f"Consider: new areas explored, unique enemy encounters, items found, "
-            f"environmental variety. {summary} "
+            f"Consider: new areas explored (dungeons, caves, new overworld screens), "
+            f"unique enemy encounters, items found, NPCs present, "
+            f"environmental variety (different seasons change the landscape). {summary} "
             f'Output JSON: {{"scores": {{"novelty": float}}, "rationale": str}}'
         )
 

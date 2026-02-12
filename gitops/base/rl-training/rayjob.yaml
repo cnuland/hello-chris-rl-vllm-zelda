@@ -1,36 +1,46 @@
 apiVersion: ray.io/v1
 kind: RayJob
 metadata:
-  name: zelda-rl-epoch-orchestrator
+  name: zelda-rl-training
   labels:
     app.kubernetes.io/part-of: zelda-rl
     app.kubernetes.io/component: rl-training
-    zelda-rl/phase: orchestrator
+    zelda-rl/phase: training
 spec:
-  entrypoint: python scripts/run_epoch.py
+  entrypoint: python scripts/run_rollouts.py
   runtimeEnvYAML: |
-    pip:
-      - boto3>=1.28.0
-      - pyboy>=2.6.0
-      - Pillow>=9.0.0
-      - PyYAML>=6.0
-      - httpx>=0.25.0
-      - pydantic>=2.0.0
-      - torch>=2.0.0
-    working_dir: "."
-    excludes:
-      - "old/"
-      - "new/"
-      - "*.ipynb"
-      - "*.md"
     env_vars:
-      MAX_EPOCHS: "100"
-      START_EPOCH: "0"
+      EPOCH: "0"
+      MAX_EPOCHS: "48"
+      EPOCH_STEPS: "1000000"
       RAY_WORKERS: "10"
+      ENVS_PER_WORKER: "3"
       EPISODE_LENGTH: "30000"
+      REWARD_MODEL_PATH: ""
+      RUN_EVAL: "true"
+      CLEAN_START: "false"
+      ENTROPY_START: "0.05"
+      ENTROPY_END: "0.015"
       LLM_GATEWAY_URL: "http://openshift-ai-inference-openshift-default.openshift-ingress.svc.cluster.local"
       LLM_NAMESPACE: "zelda-rl"
   shutdownAfterJobFinishes: false
   ttlSecondsAfterFinished: 3600
+  submitterPodTemplate:
+    spec:
+      restartPolicy: Never
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: ray-job-submitter
+        image: quay.io/cnuland/zelda-kuberay-worker:latest
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "200Mi"
+          limits:
+            cpu: "1"
+            memory: "512Mi"
   clusterSelector:
-    app.kubernetes.io/part-of: zelda-rl
+    ray.io/cluster: zelda-rl

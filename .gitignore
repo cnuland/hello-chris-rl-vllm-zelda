@@ -7,4 +7,9 @@ build/
 *.egg
 .venv/
 .env
+.DS_Store
+.pytest_cache/
 old/
+*.gbc
+*.gbc.state
+*.gbc.ram

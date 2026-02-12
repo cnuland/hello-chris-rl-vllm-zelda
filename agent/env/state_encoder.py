@@ -1,7 +1,26 @@
 """State encoder: RAM → 128-D vector + structured JSON for LLM.
 
 Vector features (128-D normalized [0,1]):
-  Coords, velocities, collisions, enemy proximity, room one-hot, inventory bits.
+  0-3:   Position & direction (x, y, dir, room)
+  4-6:   Health (current, max, ratio)
+  7-12:  Resources (rupees, keys, sword, shield, bombs, ore)
+  13-18: Seeds (6 types)
+  19-23: Equipment flags
+  24-25: Season (current, spirits)
+  26-29: Dungeon progress
+  30-33: Flags (dialog, puzzle, transition, overworld_pos)
+  34-36: Entity counts
+  37-44: Boss keys bitfield (8)
+  45-64: OAM sprite proximity (20)
+  65-68: Edge exit indicators (up, down, left, right)
+  69-72: Ray-cast distances (tiles walkable in each direction)
+  73-76: Exit distances (Manhattan dist to nearest exit per edge)
+  77-78: Direction to nearest exit (dx, dy)
+  79:    Active tile type
+  80-83: Screen edge distances (left, right, up, down)
+  84-87: Neighbor visited flags (N, S, E, W) — frontier awareness
+  88-89: Frontier exit distance, any exit distance
+  90-127: Reserved
 
 JSON planner format:
   player:{x,y,dir,hp,max_hp}, room_id, inventory:{...}, flags:{dialog,puzzle,cutscene},
@@ -16,6 +35,7 @@ import numpy as np
 
 from agent.env.ram_addresses import (
     A_BUTTON_ITEM,
+    ACTIVE_TILE_TYPE,
     B_BUTTON_ITEM,
     BOSS_KEYS,
     CURRENT_BOMBS,
@@ -149,13 +169,73 @@ def encode_vector(env: ZeldaEnv) -> np.ndarray:
 
     # --- OAM sprite proximity (up to 40 → pack first 20 y-coords) ---
     # This gives the agent a sense of "how many things are on screen"
-    sprites_packed = min(20, VECTOR_SIZE - idx)
+    sprites_packed = 20
     for i in range(sprites_packed):
         y = r(OAM_BASE + i * 4)
         v[idx] = y / 160.0 if 0 < y < 160 else 0.0
         idx += 1
 
-    # Remaining slots stay zero-filled
+    # --- Navigation features (dims 65+) ---
+    # Edge exit indicators (4): can the agent exit the room in each direction?
+    exit_up, exit_down, exit_left, exit_right = env.check_edge_exits()
+    v[idx] = exit_up
+    v[idx + 1] = exit_down
+    v[idx + 2] = exit_left
+    v[idx + 3] = exit_right
+    idx += 4
+
+    # Ray-cast distances (4): how far can the agent walk in each direction?
+    ray_up, ray_down, ray_left, ray_right = env.ray_cast_distances()
+    v[idx] = ray_up
+    v[idx + 1] = ray_down
+    v[idx + 2] = ray_left
+    v[idx + 3] = ray_right
+    idx += 4
+
+    # Exit distances (4) + direction to nearest exit (2):
+    # Manhattan distance to nearest walkable edge tile per direction,
+    # plus a 2-D vector pointing toward the overall nearest exit.
+    ed_up, ed_down, ed_left, ed_right, dir_x, dir_y = env.exit_distances()
+    v[idx] = ed_up
+    v[idx + 1] = ed_down
+    v[idx + 2] = ed_left
+    v[idx + 3] = ed_right
+    v[idx + 4] = dir_x
+    v[idx + 5] = dir_y
+    idx += 6
+
+    # Active tile type (1): what Link is standing on
+    v[idx] = min(r(ACTIVE_TILE_TYPE) / 24.0, 1.0)
+    idx += 1
+
+    # Screen edge distances (4): proximity to each room boundary
+    px = r(PLAYER_X)
+    py = r(PLAYER_Y)
+    v[idx] = px / 160.0
+    v[idx + 1] = max(160 - px, 0) / 160.0
+    v[idx + 2] = py / 144.0
+    v[idx + 3] = max(144 - py, 0) / 144.0
+    idx += 4
+
+    # --- Frontier awareness (dims 84-89) ---
+    # Neighbor visited flags (4): is the adjacent room already explored?
+    # 0.0 = frontier (unvisited), 1.0 = visited (backtracking)
+    n_north, n_south, n_east, n_west = env.neighbor_room_visited()
+    v[idx] = n_north
+    v[idx + 1] = n_south
+    v[idx + 2] = n_east
+    v[idx + 3] = n_west
+    idx += 4
+
+    # Frontier vs any exit distance (2): how far to nearest unexplored exit?
+    visited = getattr(env, "_visited_rooms_set", set())
+    frontier_d = env.frontier_exit_dist(visited)
+    any_d = env.nearest_exit_dist
+    v[idx] = min(frontier_d / 16.0, 1.0)
+    v[idx + 1] = min(any_d / 16.0, 1.0) if any_d < 999 else 1.0
+    idx += 2
+
+    # Remaining slots (idx should be ~90) stay zero-filled
     return np.clip(v, 0.0, 1.0)
 
 

@@ -28,7 +28,7 @@ class ZeldaAction(IntEnum):
     RIGHT = 4
     A = 5
     B = 6
-    START = 7
+    START = 7  # Opens inventory for item switching
 
 # RAM addresses — oracles-disasm confirmed (Seasons-specific)
 # Link object struct at w1Link = $D000, SpecialObjectStruct layout
@@ -41,16 +41,37 @@ _MAX_HEALTH = 0xC6A3     # wLinkMaxHealth (Seasons)
 _DIALOG_STATE = 0xCBA0   # wTextIsActive (0 = no text)
 _DUNGEON_FLOOR = 0xCC57  # wDungeonFloor (Seasons)
 _DEATH_COUNT = 0xC61E    # 2 bytes LE
-_PUZZLE_FLAGS = 0xC6C0
+_PUZZLE_FLAGS = 0xCC58   # wDungeonRoomProperties
 _SCREEN_TRANSITION = 0xCD00  # wScrollMode
 _LOADING = 0xC2F2
+_MENU_STATE = 0xCBCB         # wOpenedMenuType (non-zero = menu open)
+_ACTIVE_GROUP = 0xCC49       # wActiveGroup (0=overworld, 2=maku, 4-5=dungeons)
+_DUNGEON_INDEX = 0xCC55      # wDungeonIndex ($FF = overworld)
+_KEYS_PRESSED = 0xC481       # wKeysPressed (currently held buttons)
+_KEYS_JUST_PRESSED = 0xC482  # wKeysJustPressed (buttons pressed this frame)
+
+# Room collision data — populated per-room, 16 cols × 12 rows = 192 bytes
+_ROOM_COLLISIONS = 0xCE00
+_ACTIVE_TILE_TYPE = 0xCCB6
+
+# Tile types that Link can walk on (from oracles-disasm)
+_WALKABLE_TILES = frozenset({
+    0x00,  # NORMAL
+    0x03,  # CRACKEDFLOOR
+    0x04,  # VINES
+    0x05,  # GRASS
+    0x06,  # STAIRS
+    0x0E,  # CRACKED_ICE
+    0x0F,  # ICE
+    0x11,  # PUDDLE
+})
 
 
 class ZeldaEnv(gym.Env):
     """Gymnasium env wrapping PyBoy for Oracle of Seasons.
 
     Observation: 128-D float32 vector (from StateEncoder).
-    Action: Discrete(8) — NOP, UP, DOWN, LEFT, RIGHT, A, B, START.
+    Action: Discrete(7) — NOP, UP, DOWN, LEFT, RIGHT, A, B.
     """
 
     metadata = {"render_modes": ["rgb_array"], "render_fps": 60}
@@ -79,7 +100,10 @@ class ZeldaEnv(gym.Env):
         self._initial_state: bytes | None = None
 
         # Spaces
-        self.action_space = spaces.Discrete(len(ZeldaAction))
+        # Exclude START (action 7) — menu wastes episode time and the agent
+        # hasn't learned useful item switching.  START can be re-enabled later
+        # via an LLM judge sub-policy for inventory management.
+        self.action_space = spaces.Discrete(7)  # NOP, UP, DOWN, LEFT, RIGHT, A, B
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(128,), dtype=np.float32
         )
@@ -89,6 +113,7 @@ class ZeldaEnv(gym.Env):
         self.episode_count = 0
         self._initial_deaths = 0
         self._last_action: ZeldaAction | None = None
+        self._prev_room = 0
 
         # WindowEvent mappings (proven to work with PyBoy)
         self._press_events: dict[ZeldaAction, Any] = {}
@@ -110,7 +135,7 @@ class ZeldaEnv(gym.Env):
                 "pyboy is required: pip install pyboy>=2.6.0"
             ) from exc
 
-        # Build WindowEvent mappings (same approach as proven old version)
+        # Build WindowEvent mappings
         self._press_events = {
             ZeldaAction.NOP: None,
             ZeldaAction.UP: WindowEvent.PRESS_ARROW_UP,
@@ -130,6 +155,9 @@ class ZeldaEnv(gym.Env):
             ZeldaAction.B: WindowEvent.RELEASE_BUTTON_B,
             ZeldaAction.START: WindowEvent.RELEASE_BUTTON_START,
         }
+
+        # Store SELECT release event to prevent spamming (START is a valid action)
+        self._release_select_event = WindowEvent.RELEASE_BUTTON_SELECT
 
         # Suppress PyBoy sound buffer overrun spam
         logging.getLogger("pyboy.core.sound").setLevel(logging.CRITICAL + 1)
@@ -223,6 +251,170 @@ class ZeldaEnv(gym.Env):
         return count
 
     # ------------------------------------------------------------------
+    # Collision / navigation
+    # ------------------------------------------------------------------
+
+    def check_edge_exits(self) -> tuple[float, float, float, float]:
+        """Check if any tile on each screen edge is walkable (potential exit).
+
+        Returns (up, down, left, right) as floats 0.0 or 1.0.
+        Checks the standard 10x8 metatile playable area.
+        """
+        up = 0.0
+        down = 0.0
+        left = 0.0
+        right = 0.0
+
+        for x in range(10):
+            if self._read(_ROOM_COLLISIONS + 0 * 16 + x) in _WALKABLE_TILES:
+                up = 1.0
+            if self._read(_ROOM_COLLISIONS + 7 * 16 + x) in _WALKABLE_TILES:
+                down = 1.0
+        for y in range(8):
+            if self._read(_ROOM_COLLISIONS + y * 16 + 0) in _WALKABLE_TILES:
+                left = 1.0
+            if self._read(_ROOM_COLLISIONS + y * 16 + 9) in _WALKABLE_TILES:
+                right = 1.0
+
+        return up, down, left, right
+
+    def ray_cast_distances(self) -> tuple[float, float, float, float]:
+        """Cast rays in 4 cardinal directions from player position.
+
+        Returns (up, down, left, right) — number of walkable tiles before
+        hitting an obstacle, normalized by max possible distance.
+        """
+        tx, ty = self.tile_x, self.tile_y
+
+        up = 0
+        for y in range(ty - 1, -1, -1):
+            if self._read(_ROOM_COLLISIONS + y * 16 + tx) in _WALKABLE_TILES:
+                up += 1
+            else:
+                break
+
+        down = 0
+        for y in range(ty + 1, 12):
+            if self._read(_ROOM_COLLISIONS + y * 16 + tx) in _WALKABLE_TILES:
+                down += 1
+            else:
+                break
+
+        left = 0
+        for x in range(tx - 1, -1, -1):
+            if self._read(_ROOM_COLLISIONS + ty * 16 + x) in _WALKABLE_TILES:
+                left += 1
+            else:
+                break
+
+        right = 0
+        for x in range(tx + 1, 16):
+            if self._read(_ROOM_COLLISIONS + ty * 16 + x) in _WALKABLE_TILES:
+                right += 1
+            else:
+                break
+
+        return up / 8.0, down / 8.0, left / 10.0, right / 10.0
+
+    def exit_distances(self) -> tuple[float, float, float, float, float, float]:
+        """Compute Manhattan distance to nearest walkable exit on each edge.
+
+        Returns (dist_up, dist_down, dist_left, dist_right, dir_x, dir_y).
+        Distances normalized to [0, 1] where 0 = at the exit, 1 = far away.
+        dir_x/dir_y encode the direction to the overall nearest exit,
+        mapped to [0, 1] where 0.5 = no displacement.
+        """
+        tx, ty = self.tile_x, self.tile_y
+        max_dist = 16.0
+
+        best_overall = float("inf")
+        best_dx, best_dy = 0.0, 0.0
+
+        # Top edge (y=0)
+        best_up = float("inf")
+        for x in range(10):
+            if self._read(_ROOM_COLLISIONS + 0 * 16 + x) in _WALKABLE_TILES:
+                d = abs(tx - x) + ty
+                if d < best_up:
+                    best_up = d
+                if d < best_overall:
+                    best_overall = d
+                    best_dx = float(x - tx)
+                    best_dy = float(0 - ty)
+
+        # Bottom edge (y=7)
+        best_down = float("inf")
+        for x in range(10):
+            if self._read(_ROOM_COLLISIONS + 7 * 16 + x) in _WALKABLE_TILES:
+                d = abs(tx - x) + abs(7 - ty)
+                if d < best_down:
+                    best_down = d
+                if d < best_overall:
+                    best_overall = d
+                    best_dx = float(x - tx)
+                    best_dy = float(7 - ty)
+
+        # Left edge (x=0)
+        best_left = float("inf")
+        for y in range(8):
+            if self._read(_ROOM_COLLISIONS + y * 16 + 0) in _WALKABLE_TILES:
+                d = tx + abs(ty - y)
+                if d < best_left:
+                    best_left = d
+                if d < best_overall:
+                    best_overall = d
+                    best_dx = float(0 - tx)
+                    best_dy = float(y - ty)
+
+        # Right edge (x=9)
+        best_right = float("inf")
+        for y in range(8):
+            if self._read(_ROOM_COLLISIONS + y * 16 + 9) in _WALKABLE_TILES:
+                d = abs(9 - tx) + abs(ty - y)
+                if d < best_right:
+                    best_right = d
+                if d < best_overall:
+                    best_overall = d
+                    best_dx = float(9 - tx)
+                    best_dy = float(y - ty)
+
+        # Normalize distances (0 = at exit, 1 = far/no exit)
+        dist_up = min(best_up / max_dist, 1.0) if best_up < float("inf") else 1.0
+        dist_down = min(best_down / max_dist, 1.0) if best_down < float("inf") else 1.0
+        dist_left = min(best_left / max_dist, 1.0) if best_left < float("inf") else 1.0
+        dist_right = min(best_right / max_dist, 1.0) if best_right < float("inf") else 1.0
+
+        # Direction to nearest exit: normalize and map [-1,1] → [0,1]
+        if best_overall < float("inf") and best_overall > 0:
+            mag = abs(best_dx) + abs(best_dy)
+            dir_x = (best_dx / mag + 1.0) / 2.0
+            dir_y = (best_dy / mag + 1.0) / 2.0
+        else:
+            dir_x = 0.5
+            dir_y = 0.5
+
+        return dist_up, dist_down, dist_left, dist_right, dir_x, dir_y
+
+    @property
+    def active_tile_type(self) -> int:
+        return self._read(_ACTIVE_TILE_TYPE)
+
+    # ------------------------------------------------------------------
+    # Input safety
+    # ------------------------------------------------------------------
+
+    def _release_select(self) -> None:
+        """Force-release SELECT to prevent spamming (START is a valid action)."""
+        if self._pyboy is None:
+            return
+        self._pyboy.send_input(self._release_select_event)
+
+    def _clear_input_registers(self) -> None:
+        """Zero out software input registers to flush stale button state."""
+        self._pyboy.memory[_KEYS_PRESSED] = 0x00
+        self._pyboy.memory[_KEYS_JUST_PRESSED] = 0x00
+
+    # ------------------------------------------------------------------
     # Gymnasium API
     # ------------------------------------------------------------------
 
@@ -236,6 +428,17 @@ class ZeldaEnv(gym.Env):
         if self._initial_state is not None:
             self._pyboy.load_state(io.BytesIO(self._initial_state))
 
+        # Flush stale button state from save state
+        self._clear_input_registers()
+
+        # Tick a few frames to let the game engine settle after state load
+        for _ in range(10):
+            self._pyboy.tick()
+        self._prev_room = self.room_id
+
+        # Force-release SELECT to prevent spamming
+        self._release_select()
+
         self.step_count = 0
         self.episode_count += 1
         self._initial_deaths = self._read16(_DEATH_COUNT)
@@ -245,8 +448,18 @@ class ZeldaEnv(gym.Env):
         info = self._get_info()
         return obs, info
 
+    def _dismiss_menu(self) -> None:
+        """Auto-dismiss menu via direct RAM write (avoids registering START input)."""
+        if self._read(_MENU_STATE) == 0:
+            return
+        self._pyboy.memory[_MENU_STATE] = 0
+        logger.debug("Menu dismissed via RAM write")
+
     def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         act = ZeldaAction(action)
+
+        # Force-release SELECT to prevent spamming
+        self._release_select()
 
         # Release previous button first (matches proven old version)
         if self._last_action is not None and self._last_action != ZeldaAction.NOP:
@@ -259,7 +472,8 @@ class ZeldaEnv(gym.Env):
         if press_event:
             self._pyboy.send_input(press_event)
 
-        # Advance emulator (bare tick like old version)
+        # Advance emulator — natural screen transitions handled by
+        # the game engine (clean save state, no mid-fade hacks needed).
         for _ in range(self.frame_skip):
             self._pyboy.tick()
 
@@ -285,6 +499,93 @@ class ZeldaEnv(gym.Env):
 
         return encode_vector(self)
 
+    @property
+    def nearest_exit_dist(self) -> int:
+        """Manhattan distance to the nearest walkable edge tile."""
+        tx, ty = self.tile_x, self.tile_y
+        best = 999
+        for x in range(10):
+            if self._read(_ROOM_COLLISIONS + 0 * 16 + x) in _WALKABLE_TILES:
+                best = min(best, abs(tx - x) + ty)
+            if self._read(_ROOM_COLLISIONS + 7 * 16 + x) in _WALKABLE_TILES:
+                best = min(best, abs(tx - x) + abs(7 - ty))
+        for y in range(8):
+            if self._read(_ROOM_COLLISIONS + y * 16 + 0) in _WALKABLE_TILES:
+                best = min(best, tx + abs(ty - y))
+            if self._read(_ROOM_COLLISIONS + y * 16 + 9) in _WALKABLE_TILES:
+                best = min(best, abs(9 - tx) + abs(ty - y))
+        return best
+
+    def frontier_exit_dist(self, visited_rooms: set[int]) -> int:
+        """Manhattan distance to nearest exit leading to an UNVISITED room.
+
+        For each screen edge, checks whether the neighbor room in that
+        direction has been visited. Only counts walkable edge tiles that
+        lead to frontier (unvisited) rooms. Falls back to nearest_exit_dist
+        when all neighbors are visited.
+        """
+        tx, ty = self.tile_x, self.tile_y
+        room = self.room_id
+        row, col = room // 16, room % 16
+
+        best_frontier = 999
+        best_any = 999
+
+        # Top edge (y=0) → north neighbor
+        north_id = (row - 1) * 16 + col if row > 0 else -1
+        for x in range(10):
+            if self._read(_ROOM_COLLISIONS + 0 * 16 + x) in _WALKABLE_TILES:
+                d = abs(tx - x) + ty
+                best_any = min(best_any, d)
+                if north_id >= 0 and north_id not in visited_rooms:
+                    best_frontier = min(best_frontier, d)
+
+        # Bottom edge (y=7) → south neighbor
+        south_id = (row + 1) * 16 + col if row < 15 else -1
+        for x in range(10):
+            if self._read(_ROOM_COLLISIONS + 7 * 16 + x) in _WALKABLE_TILES:
+                d = abs(tx - x) + abs(7 - ty)
+                best_any = min(best_any, d)
+                if south_id >= 0 and south_id not in visited_rooms:
+                    best_frontier = min(best_frontier, d)
+
+        # Left edge (x=0) → west neighbor
+        west_id = row * 16 + (col - 1) if col > 0 else -1
+        for y in range(8):
+            if self._read(_ROOM_COLLISIONS + y * 16 + 0) in _WALKABLE_TILES:
+                d = tx + abs(ty - y)
+                best_any = min(best_any, d)
+                if west_id >= 0 and west_id not in visited_rooms:
+                    best_frontier = min(best_frontier, d)
+
+        # Right edge (x=9) → east neighbor
+        east_id = row * 16 + (col + 1) if col < 15 else -1
+        for y in range(8):
+            if self._read(_ROOM_COLLISIONS + y * 16 + 9) in _WALKABLE_TILES:
+                d = abs(9 - tx) + abs(ty - y)
+                best_any = min(best_any, d)
+                if east_id >= 0 and east_id not in visited_rooms:
+                    best_frontier = min(best_frontier, d)
+
+        return best_frontier if best_frontier < 999 else best_any
+
+    def neighbor_room_visited(self) -> tuple[float, float, float, float]:
+        """Check if each adjacent room (N/S/E/W) has been visited this episode.
+
+        Returns (north, south, east, west) as 0.0 (unvisited) or 1.0 (visited).
+        Reads from _visited_rooms_set, which is set by RewardWrapper.
+        """
+        visited = getattr(self, "_visited_rooms_set", set())
+        room = self.room_id
+        row, col = room // 16, room % 16
+
+        north = 1.0 if row > 0 and ((row - 1) * 16 + col) in visited else 0.0
+        south = 1.0 if row < 15 and ((row + 1) * 16 + col) in visited else 0.0
+        west = 1.0 if col > 0 and (row * 16 + (col - 1)) in visited else 0.0
+        east = 1.0 if col < 15 and (row * 16 + (col + 1)) in visited else 0.0
+
+        return north, south, east, west
+
     def _get_info(self) -> dict[str, Any]:
         return {
             "room_id": self.room_id,
@@ -295,7 +596,11 @@ class ZeldaEnv(gym.Env):
             "health": self.health,
             "max_health": self.max_health,
             "dialog_active": self.dialog_active,
+            "menu_active": self._read(_MENU_STATE) != 0,
             "dungeon_floor": self.dungeon_floor,
+            "active_group": self._read(_ACTIVE_GROUP),
+            "dungeon_index": self._read(_DUNGEON_INDEX),
+            "nearest_exit_dist": self.nearest_exit_dist,
             "step": self.step_count,
             "episode": self.episode_count,
             "sprites": self.oam_sprite_count(),

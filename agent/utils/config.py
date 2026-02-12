@@ -21,18 +21,18 @@ class ObservationConfig(BaseModel):
 
 
 class RewardConfig(BaseModel):
-    rupee: float = 0.01
-    key: float = 0.5
-    death: float = -50.0
-    health_loss: float = -0.1
-    time_penalty: float = -0.0001
-    new_room: float = 20.0
+    rupee: float = 0.05
+    key: float = 2.0
+    death: float = -5.0
+    health_loss: float = -0.02
+    time_penalty: float = 0.0
+    new_room: float = 200.0
     movement: float = 0.1
-    grid_exploration: float = 5.0
-    revisit: float = -0.5
-    maku_tree: float = 100.0
-    sword: float = 200.0
-    dungeon: float = 150.0
+    grid_exploration: float = 2.0
+    revisit: float = 0.0
+    maku_tree: float = 500.0
+    sword: float = 500.0
+    dungeon: float = 500.0
 
 
 class LLMConfig(BaseModel):
@@ -51,10 +51,10 @@ class TrainingConfig(BaseModel):
     )
     batch_size: int = Field(default_factory=lambda: int(os.getenv("BATCH_SIZE", "4096")))
     lr: float = 3e-4
-    gamma: float = 0.99
+    gamma: float = 0.999
     lambda_: float = 0.95
     clip_param: float = 0.2
-    entropy_coeff: float = 0.01
+    entropy_coeff: float = 0.05
     num_gpus: int = 0
 
 

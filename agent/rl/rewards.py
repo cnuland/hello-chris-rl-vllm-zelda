@@ -1,7 +1,7 @@
 """Reward shaping: coverage, RND curiosity, potential-based RLAIF.
 
-Coverage reward: +0.2 per first-visit tile per room (8×8 bin).
-RND curiosity: clamped to <= 30% of extrinsic reward.
+Coverage reward: decaying exploration bonus per first-visit tile per room.
+RND curiosity: clamped to <= 30% of extrinsic reward, with obs normalization.
 RLAIF shaping: r' = r + lambda * R_phi (potential-based).
 """
 
@@ -18,19 +18,32 @@ class CoverageReward:
 
     Tiles are binned into 8×8 grids within each room (160×144 screen
     → 20×18 tiles → 8×8 bins ≈ 2-3 tiles per bin).
+
+    Coordinate decay (inspired by pokemonred_puffer): tile exploration
+    bonus decays by decay_factor each step, discouraging circling behavior
+    while still rewarding genuinely new discoveries.
     """
 
-    bonus_per_tile: float = 0.2
-    bonus_per_room: float = 20.0
-    revisit_penalty: float = -0.5
+    bonus_per_tile: float = 2.0
+    bonus_per_room: float = 200.0
+    revisit_penalty: float = 0.0
+    decay_factor: float = 0.9995  # Tile bonus decays over time
     _visited: dict[int, set[tuple[int, int]]] = field(default_factory=dict)
     _visited_rooms: set[int] = field(default_factory=set)
+    _step_count: int = 0
 
     def step(self, room_id: int, pixel_x: int, pixel_y: int) -> float:
         """Return coverage reward for this step."""
         reward = 0.0
+        self._step_count += 1
 
-        # New room bonus
+        # Decay multiplier — tile bonus decays over time to discourage circling
+        decay = self.decay_factor ** self._step_count
+
+        # New room bonus — flat per room (no decay)
+        # Constant reward per room reduces variance between episodes;
+        # escalating bonuses caused mean reward to be dominated by
+        # stochastic room count rather than policy quality.
         if room_id not in self._visited_rooms:
             self._visited_rooms.add(room_id)
             reward += self.bonus_per_room
@@ -45,7 +58,7 @@ class CoverageReward:
 
         if tile not in self._visited[room_id]:
             self._visited[room_id].add(tile)
-            reward += self.bonus_per_tile
+            reward += self.bonus_per_tile * decay
         else:
             reward += self.revisit_penalty
 
@@ -54,6 +67,7 @@ class CoverageReward:
     def reset(self) -> None:
         self._visited.clear()
         self._visited_rooms.clear()
+        self._step_count = 0
 
     @property
     def unique_rooms(self) -> int:
@@ -70,6 +84,8 @@ class RNDCuriosity:
     Maintains a fixed random target network and a trainable predictor.
     Curiosity = MSE between predictor and target outputs.
     Clamped to <= 30% of extrinsic reward magnitude.
+
+    Includes running observation normalization for stable RND predictions.
     """
 
     def __init__(
@@ -89,6 +105,11 @@ class RNDCuriosity:
         self._target_net = None
         self._predictor_net = None
         self._optimizer = None
+
+        # Running observation normalization
+        self._obs_mean = np.zeros(obs_dim, dtype=np.float64)
+        self._obs_var = np.ones(obs_dim, dtype=np.float64)
+        self._obs_count = 0
 
     def _lazy_init(self) -> None:
         if self._initialized:
@@ -114,12 +135,23 @@ class RNDCuriosity:
         self._optimizer = torch.optim.Adam(self._predictor_net.parameters(), lr=self._lr)
         self._initialized = True
 
+    def _normalize_obs(self, obs: np.ndarray) -> np.ndarray:
+        """Running normalization for stable RND predictions."""
+        self._obs_count += 1
+        delta = obs - self._obs_mean
+        self._obs_mean += delta / self._obs_count
+        delta2 = obs - self._obs_mean
+        self._obs_var += (delta * delta2 - self._obs_var) / self._obs_count
+        std = np.sqrt(self._obs_var + 1e-8)
+        return (obs - self._obs_mean) / std
+
     def compute(self, obs: np.ndarray, extrinsic_reward: float) -> float:
         """Compute clamped curiosity bonus and update predictor."""
         self._lazy_init()
         import torch
 
-        obs_t = torch.from_numpy(obs).float().unsqueeze(0)
+        normed = self._normalize_obs(obs.astype(np.float64)).astype(np.float32)
+        obs_t = torch.from_numpy(normed).float().unsqueeze(0)
         with torch.no_grad():
             target = self._target_net(obs_t)
         pred = self._predictor_net(obs_t)
@@ -147,7 +179,7 @@ class PotentialShaping:
     """
 
     gamma: float = 0.99
-    lam: float = 0.15  # lambda weight for R_phi
+    lam: float = 0.05  # lambda weight for R_phi (conservative to avoid destabilization)
     _prev_potential: float = 0.0
 
     def shape(self, extrinsic: float, phi_s_prime: float) -> float:

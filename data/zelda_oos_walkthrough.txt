@@ -1,0 +1,745 @@
+================================================================================
+THE LEGEND OF ZELDA: ORACLE OF SEASONS - COMPREHENSIVE WALKTHROUGH
+================================================================================
+Platform: Game Boy Color (1999/2001)
+Developer: Capcom / Nintendo
+
+TABLE OF CONTENTS
+  1. GAME OVERVIEW & STORY
+  2. CORE MECHANICS - ROD OF SEASONS
+  3. KEY ITEMS & EQUIPMENT
+  4. WORLD MAP & AREAS
+  5. WALKTHROUGH: OPENING & HORON VILLAGE
+  6. DUNGEON 1: GNARLED ROOT DUNGEON
+  7. EASTERN SUBURBS & SUBROSIA
+  8. DUNGEON 2: SNAKE'S REMAINS
+  9. SPOOL SWAMP & SUMMER POWER
+  10. DUNGEON 3: POISON MOTH'S LAIR
+  11. SUNKEN CITY & MT. CUCCO
+  12. DUNGEON 4: DANCING DRAGON DUNGEON
+  13. EYEGLASS LAKE & AUTUMN POWER
+  14. DUNGEON 5: UNICORN'S CAVE
+  15. TARM RUINS & LOST WOODS
+  16. DUNGEON 6: ANCIENT RUINS
+  17. GRAVEYARD & PIRATE QUEST
+  18. DUNGEON 7: EXPLORER'S CRYPT
+  19. TEMPLE REMAINS
+  20. DUNGEON 8: SWORD & SHIELD MAZE
+  21. ONOX'S CASTLE & FINAL BOSS
+  22. TRADING SEQUENCE (NOBLE SWORD)
+  23. ANIMAL COMPANIONS
+  24. ESSENCES OF NATURE SUMMARY
+
+================================================================================
+1. GAME OVERVIEW & STORY
+================================================================================
+
+Link arrives in the land of Holodrum where he meets Din, the Oracle of Seasons,
+dancing with a troupe of performers. The evil General Onox attacks, kidnapping
+Din and burying the Temple of Seasons underground into the subterranean world
+of Subrosia. Without the Oracle, the seasons of Holodrum fall into chaos.
+
+The Maku Tree, guardian of Holodrum, tells Link he must collect the 8 Essences
+of Nature from 8 dungeons. These essences will produce the Huge Maku Seed,
+which can penetrate the barrier around Onox's Castle in the Northern Peak.
+
+KEY NPCs:
+- Maku Tree: Guardian of Holodrum, gives the Gnarled Key and later the Huge
+  Maku Seed after all 8 essences are collected.
+- Din: Oracle of Seasons, kidnapped by Onox. Must be rescued.
+- Impa: Zelda's nursemaid, accompanies the troupe at game start.
+- Rosa: A Subrosian girl; give her a Ribbon and she helps access the Temple
+  of Seasons to obtain the Summer power.
+- Subrosians: Underground dwellers who live in Subrosia (volcanic underworld).
+- Bipin & Blossom: Couple in Horon Village raising a baby; player choices
+  affect the child's growth throughout the game.
+- Maple: Witch's apprentice who flies overhead; bumping into her causes items
+  to scatter. Trading sequence involves her.
+
+================================================================================
+2. CORE MECHANICS - ROD OF SEASONS
+================================================================================
+
+The Rod of Seasons is found in the Temple of Seasons in Subrosia. Initially it
+has no power. Link must visit four towers in the temple to obtain each season:
+
+  SEASON      | TOWER LOCATION     | WHEN OBTAINED
+  ------------|--------------------|---------------------------------
+  Winter      | SE Tower           | After Dungeon 1 (first visit to Subrosia)
+  Summer      | After Rosa quest   | After Dungeon 2 (give Ribbon to Rosa)
+  Spring      | Secret entrance    | After Dungeon 3 (Mt. Cucco area)
+  Autumn      | Requires Bomb Flwr | After Dungeon 4 (Eyeglass Lake portal)
+
+HOW TO USE: Stand on a tree stump and swing the Rod. The season cycles. Each
+season changes the overworld environment:
+
+  WINTER: Snow covers ground, water freezes (walkable), snow piles create
+          ramps to higher ledges, some paths blocked by snowdrifts.
+  SPRING: Flowers bloom, vines grow on walls (climbable), floods fill some
+          areas, certain pits are covered by flowers.
+  SUMMER: Vines grow fully, water in some areas dries up, heat wilts certain
+          obstacles. Creepers grow to create ladders.
+  AUTUMN: Leaves pile up in pits (walkable), mushrooms become pickable
+          (can be tossed), Rocky Mushrooms can be picked with Power Bracelet.
+
+The Rod also functions as a melee weapon (damages undead, knocks back others).
+In the final Onox battle, use it to knock Din's crystal away when Onox uses
+her as a shield.
+
+================================================================================
+3. KEY ITEMS & EQUIPMENT
+================================================================================
+
+SWORDS:
+- Wooden Sword: Found in Hero's Cave at game start.
+- Noble Sword: Reward from trading sequence (see Section 22).
+- Master Sword: Linked Game only.
+
+SHIELDS:
+- Wooden Shield: Buy from Horon Village shop (30 rupees).
+- Iron Shield: Buy from Subrosia Market or Horon Village (upgraded).
+
+DUNGEON ITEMS (obtained in order):
+1. Seed Satchel (Ember Seeds x20) - Dungeon 1: Gnarled Root
+2. Power Bracelet - Dungeon 2: Snake's Remains (lift heavy objects)
+3. Roc's Feather - Dungeon 3: Poison Moth's Lair (jump 1 tile)
+4. Slingshot - Dungeon 4: Dancing Dragon (ranged seed attacks)
+5. Magnetic Gloves - Dungeon 5: Unicorn's Cave (attract/repel magnets)
+6. Magical Boomerang - Dungeon 6: Ancient Ruins (controllable boomerang)
+7. Roc's Cape - Dungeon 7: Explorer's Crypt (jump 2 tiles + glide)
+8. Hyper Slingshot - Dungeon 8: Sword & Shield Maze (3-way shot)
+
+OTHER KEY ITEMS:
+- Bombs: Found in dungeons; used to blast walls and damage enemies.
+- Boomerang: Won at Subrosia Dance Hall (before Dungeon 2).
+- Flippers: From Master Diver in Sunken City (swim in deep water).
+- Shovel: From Subrosian house (dig in soft soil).
+- Rod of Seasons: Temple of Seasons in Subrosia.
+- Gasha Seeds: Plant in soft soil; after 40 kills, a Gasha Nut grows
+  containing a random reward (ring, potion, piece of heart, etc.).
+
+MYSTICAL SEEDS (5 types, found at seed trees throughout Holodrum):
+- Ember Seeds: Burn things, light torches, damage certain enemies.
+- Mystery Seeds: Use on owl statues for hints; reveal hidden things.
+- Pegasus Seeds: Grant a speed boost; stun some enemies.
+- Scent Seeds: Attract certain creatures; can be used as slingshot ammo.
+- Gale Seeds: Warp to any visited seed tree.
+
+================================================================================
+4. WORLD MAP & AREAS
+================================================================================
+
+HOLODRUM (Overworld):
+- Horon Village: Central hub, shops, Maku Tree, Vasu Jewelers.
+- North Horon: Path to Gnarled Root Dungeon, Onox's Castle entrance.
+- Eastern Suburbs: Windmill area, portal to Subrosia.
+- Woods of Winter: Contains Snake's Remains dungeon.
+- Spool Swamp: Swamp area, portal to Subrosia, Poison Moth's Lair.
+- Sunken City: Flooded city, Master Diver, Dimitri's area.
+- Mt. Cucco: Mountain region, Goron Mountain, Spring power.
+- Eyeglass Lake: Lake region, portal to Subrosia for Autumn power.
+- Tarm Ruins: Requires 4 jewels to enter, contains Lost Woods.
+- Samasa Desert: Accessed via pirate ship, contains pirate skull.
+- Graveyard: Explorer's Crypt location, ghost-related puzzles.
+- Temple Remains: Sunken temple on surface; path to Dungeon 8.
+- Northern Peak: Onox's Castle location.
+
+SUBROSIA (Underground):
+- Temple of Seasons: Contains Rod of Seasons and 4 season towers.
+- Subrosia Dance Hall: Win the Boomerang by matching dance moves.
+- Subrosia Market: Buy rare items with Ore Chunks and Star-shaped Ore.
+- Subrosian Smithy: Upgrade sword; polish the Pirate's Bell.
+- Lava Lake/Baths: Various areas with lava hazards.
+- Strange Brothers' House: Steal the Roc's Ring from treasure hoarders.
+- Bomb Flower: Pick up with Power Bracelet for Autumn tower access.
+
+================================================================================
+5. WALKTHROUGH: OPENING & HORON VILLAGE
+================================================================================
+
+OPENING:
+- Start a new game, name Link, set message speed.
+- After cutscene, exit east from the wagon.
+- Talk to everyone at the camp, then talk to Din (red-haired dancer).
+- Cutscene: Onox attacks, captures Din, Temple of Seasons sinks.
+- Link wakes in Horon Village.
+
+HORON VILLAGE:
+- Talk to Impa, then visit Mayor Ruul's house for a Gasha Seed.
+- Visit Vasu Jewelers to get Ring Box and a free ring.
+- Buy Wooden Shield from shop for 30 rupees (optional but recommended).
+- Enter Hero's Cave (south of Maku Tree):
+  - Push blocks to open doors, avoid enemies.
+  - Get a key, then the Wooden Sword from the final chest.
+- Return to Maku Tree (north of Vasu's):
+  - Hit the gate with sword to open it.
+  - Hit the bubble on Maku Tree's nose to wake him.
+  - Receive the Gnarled Key.
+
+================================================================================
+6. DUNGEON 1: GNARLED ROOT DUNGEON
+================================================================================
+
+LOCATION: North of Horon Village. Use Gnarled Key on the keyhole.
+ESSENCE: Fertile Soil
+DUNGEON ITEM: Seed Satchel (Ember Seeds x20)
+BOSS: Aquamentus
+
+WALKTHROUGH:
+- Entrance: Push upper-right block to open doors.
+- East room: Defeat Stalfos for a key.
+- West room: More Stalfos, get the Map.
+- North: Mine cart puzzle for Gasha Seed. Block puzzle solution:
+  Move second-to-right block vertically, push left block left,
+  move lower-middle block down, push remaining block left.
+- East: Climb stairs for Compass.
+- Switch mine cart tracks via lever, ride east twice for Bombs.
+- Right side room: Step on switch near blade traps for second key.
+- Mini-Boss - Brother Goriyas: Dodge their boomerangs (curved path).
+  Strike both repeatedly with sword.
+- After mini-boss: Push blocks, use ladders to reach Seed Satchel.
+- Light torches with Ember Seeds to open door. Defeat monsters for
+  Boss Key.
+- BOSS - Aquamentus: Hit his horn when he lands. Keep distance during
+  charges. Watch for head movement before 3-fireball spread attack.
+  Dodge sideways.
+- Collect Fertile Soil essence and Heart Container.
+
+POST-DUNGEON:
+- Mayor Ruul's house: Bomb right wall for Gasha Seed.
+- Burn small tree near village for Piece of Heart.
+- Light torch in house for Cuccodex (trading sequence item #1).
+
+================================================================================
+7. EASTERN SUBURBS & SUBROSIA
+================================================================================
+
+EASTERN SUBURBS:
+- From south of Maku Tree, burn small trees with Ember Seeds.
+- Exit east to Eastern Suburbs.
+- Go north, past the windmill screen, then east.
+- A mysterious figure appears - follow them discreetly.
+- IMPORTANT: When the figure goes past a fence, DO NOT follow
+  immediately. Wait for them to return and look around again.
+- After they leave, go west. Find where the figure disappeared
+  into a bush in the northwest.
+- Cut the bush to reveal a portal to Subrosia.
+
+SUBROSIA - FIRST VISIT:
+1. Subrosia Dance Hall: Match the red Subrosian's dance moves
+   (3 moves at a time, then repeat). Win the Boomerang.
+2. Temple of Seasons: Go to the central altar and speak with
+   the Season Spirits. Obtain the Rod of Seasons.
+3. Tower of Winter (SE tower): Use boomerang to hit crystal switch.
+   Proceed through tower to meet Spirit of Winter. Rod gains Winter.
+4. Return to Holodrum. Use Rod on tree stump to change to Winter.
+5. Go to a nearby house, jump into chimney. Meet girl inside.
+   Receive Shovel.
+6. Find Mystery Seed tree. Hit with sword to collect Mystery Seeds.
+
+================================================================================
+8. DUNGEON 2: SNAKE'S REMAINS
+================================================================================
+
+LOCATION: Woods of Winter (change season to Winter to access).
+ESSENCE: Gift of Time
+DUNGEON ITEM: Power Bracelet
+BOSS: Dodongo
+
+WALKTHROUGH:
+- Entrance: Go west past blade traps for 5 rupees.
+- North: Defeat Ropes, get key from ceiling.
+- Light two torches for compass room. Defeat enemies, push
+  middle-right block right for compass.
+- West wall: Bomb for 176 rupees (hidden cache).
+- Defeat Pig Warriors to obtain Power Bracelet (lift heavy objects).
+- WARNING: Getting Power Bracelet triggers companion decision point.
+  If you go to Spool Swamp now, you lose chance to befriend Dimitri
+  and Moosh.
+- Lift pot blocking chest for Dungeon Map.
+- Collect 3 additional small keys via puzzle rooms.
+- Mini-Boss - Facade: Only vulnerable to bombs. Place bombs on the
+  face when it appears in center of arena.
+- BOSS - Dodongo: When he opens mouth, throw a bomb in. Then use
+  Power Bracelet to lift Dodongo and throw him onto the spikes.
+  Dodge charges by moving vertically.
+- Collect Gift of Time essence.
+
+================================================================================
+9. SPOOL SWAMP & SUMMER POWER
+================================================================================
+
+ANIMAL COMPANION DECISION (permanent):
+- Ricky (kangaroo): Default if no flute obtained.
+- Dimitri (dodongo): Requires Strange Flute from Subrosia Dance Hall.
+- Moosh (bear): Buy Strange Flute from Horon shop (150 rupees).
+After passing rocks north of Horon Village, Dimitri/Moosh become
+permanently unavailable to befriend.
+
+PRE-SWAMP:
+- Fight Blaino in boxing match (10 rupee wager) to win Ricky's Gloves.
+- Secure preferred Strange Flute if wanting Dimitri or Moosh.
+
+SPOOL SWAMP:
+- Use chosen animal companion's abilities to navigate.
+- Locate and retrieve the Square Jewel.
+- Find portal to Subrosia.
+
+OBTAINING SUMMER POWER:
+1. In Subrosia: Collect Star-shaped Ore from the beach.
+2. Trade ore at Subrosia Market for a Ribbon.
+3. Give Ribbon to Rosa (Subrosian girl).
+4. Rosa helps you access the Temple of Seasons.
+5. Enter the Summer tower, receive Power of Summer for Rod.
+
+Return to Spool Swamp. Use Rod on tree stump, change to Summer.
+Vines grow, allowing access to Poison Moth's Lair.
+
+================================================================================
+10. DUNGEON 3: POISON MOTH'S LAIR
+================================================================================
+
+LOCATION: Spool Swamp (use Summer on tree stump, climb vines).
+ESSENCE: Bright Sun
+DUNGEON ITEM: Roc's Feather (jump ability)
+BOSS: Mothula
+
+WALKTHROUGH:
+- North from entrance: Defeat Spiny Beetles (shield-flip, then strike).
+- Navigate east past mollusk enemies and Wallmasters.
+- Push pot from right side onto pressure switch to progress.
+- Arm-Mimics: Move opposite to your direction. Ignore stairs
+  temporarily, head west.
+- Use Power Bracelet to get first key.
+- Arm-Mimic room stairs: Defeat Pols Voices above.
+  Push northernmost block up, continue north for Bombs.
+- Bomb north wall (different tiles) for Map.
+- Statue puzzle area + Pegasus Seeds across quicksand.
+  Defeat Arm-Mimics to reveal Roc's Feather (JUMP ABILITY).
+- South of feather room: Use feather on moving platforms for Compass.
+- Trampoline section through spikes for second key.
+- Moving platforms + Thwomp obstacles for Gasha Seed.
+- Mini-Boss - Omuai: When an Omuai surfaces from water, use Power
+  Bracelet to pull it up and throw it. Strike while airborne.
+- Jump over gap with Roc's Feather for Boss Key.
+- BOSS - Mothula: Platform-jumping boss. Shoots small moths (destroy
+  with sword) and expanding fireballs. Stay on middle platforms,
+  dodge projectiles, strike when boss lands. If you fall, use
+  trampoline below to return.
+- Collect Bright Sun essence.
+
+================================================================================
+11. SUNKEN CITY & MT. CUCCO
+================================================================================
+
+TRADING SEQUENCE PROGRESS:
+- Give Iron Pot to Subrosian Chef for Lava Soup.
+
+SUNKEN CITY:
+- Path varies based on animal companion chosen.
+- Recruit Dimitri if needed (give bombs to kids holding him).
+- Push four statues into square formation, spin attack for Master's
+  Plaque.
+- Show plaque to Master Diver, receive Flippers.
+- Dive into reef holes for underwater navigation.
+
+MT. CUCCO:
+- Access via Master Diver's secret underwater route.
+- Retrieve stolen items from Subrosians.
+- Obtain Power of Spring from Temple of Seasons spring tower.
+- Give Spring Banana to Moosh (defeat a tree to get it).
+- Use Moosh to traverse western areas (flying ability).
+- Trade Lava Soup to Biggoron for Goron Vase.
+- Trade with red Goron for bigger Ring Box.
+
+TO DUNGEON 4:
+- Navigate snowy Goron Mountain using Rod of Seasons.
+- Push keyhole mechanism.
+- Change to Summer for vines leading to Dancing Dragon Dungeon.
+
+================================================================================
+12. DUNGEON 4: DANCING DRAGON DUNGEON
+================================================================================
+
+LOCATION: East of Sunken City / South of Mt. Cucco area.
+ESSENCE: Soothing Rain
+DUNGEON ITEM: Slingshot
+BOSS: Gohma
+
+WALKTHROUGH:
+- Entrance: Push left middle block right for Bombs.
+- Mine cart section: Ignore initial switch. Bomb cracked right wall.
+  Lift pots and place on switches for key from ceiling.
+- Hit switch before passing in mine cart for water room alternate path.
+  Push statue onto switch, swim northwest for stairs.
+- Navigate past green Wizzrobes (use southwest exit).
+- Moving platforms: Use Roc's Feather to jump across. Time jumps to
+  reach higher platforms near ceiling. Right side for key.
+- Underwater spike corridor: Press B when rollers pass to avoid damage.
+- Like Like room: Defeat water enemies for key, dive to retrieve.
+- Pegasus Seed jump challenge: Use seed, jump gaps after eliminating
+  Stalfos that trigger stair appearance.
+- Eye mechanism: Access right "eye," dive on left side for Boss Key.
+- Items found: Bombs, Map, Compass, Slingshot, 5 Small Keys.
+- Mini-Boss - Agunima: Light torches with Ember Seeds. The Agunima
+  with a shadow is vulnerable only while both torches lit. Attack
+  twice before it throws fireballs.
+- BOSS - Gohma: Target the claw (weak point). Run directly left or
+  right when it charges. Use slingshot on eye once claw breaks.
+  Kill spawned bugs immediately.
+- Collect Soothing Rain essence.
+
+================================================================================
+13. EYEGLASS LAKE & AUTUMN POWER
+================================================================================
+
+OPTIONAL TRADING:
+- Trade Goron Vase to Ingo for Fish.
+- Trade Fish for Megaphone (cat owner north of Horon).
+
+EYEGLASS LAKE:
+- Find Subrosia portal southeast of the lake.
+- Jump across holes with Roc's Feather, swim to portal.
+
+IN SUBROSIA:
+- Navigate past Fire Pokey enemies.
+- Use Power Bracelet to lift buried Bomb Flower.
+- Enter Temple of Seasons, reach Autumn tower.
+- Speak with Spirit of Autumn to receive Power of Autumn.
+
+HEADING TO DUNGEON 5:
+- Use Rod on tree stump, change to Autumn.
+- Collect mushrooms (pickable in Autumn).
+- Enter Unicorn's Cave.
+
+================================================================================
+14. DUNGEON 5: UNICORN'S CAVE
+================================================================================
+
+LOCATION: Near Eyeglass Lake.
+ESSENCE: Nurturing Warmth
+DUNGEON ITEM: Magnetic Gloves
+BOSS: Digdogger
+
+WALKTHROUGH:
+- Go north, then east. Defeat Darknut to reveal N magnet.
+- Mine carts are primary navigation throughout dungeon.
+- Descend stairs, navigate through Gibdos for Dungeon Map.
+- Solve magnet puzzles to reach Magnetic Gloves platform.
+
+MAGNETIC GLOVES MECHANICS:
+- Glove says N: Attracts N magnets, repels S magnets.
+- Glove says S: Attracts S magnets, repels N magnets.
+- Switch polarity to solve puzzles. Essential for progression.
+
+- Navigate conveyor belts for Compass.
+- Armos Knights: Defeat in specific order, then open chests in
+  that same sequence.
+- Mini-Boss - Syger: Jump with Roc's Feather to dodge rolling
+  attacks. Strike his tail.
+- BOSS - Digdogger: Push and pull the spiked ball into the boss
+  repeatedly using Magnetic Gloves. Use polarity switching.
+- Collect Nurturing Warmth essence.
+
+================================================================================
+15. TARM RUINS & LOST WOODS
+================================================================================
+
+OBTAINING THE 4 JEWELS:
+Collect X-shaped, Round, Square, and Pyramid jewels from various
+locations throughout Holodrum and Subrosia.
+- Visit Subrosia Market. Buy Member's Card (Silver Card) for 5 Ore
+  Chunks.
+- Collect all four jewels through exploration and quests.
+
+ENTERING TARM RUINS:
+- Place the four jewels into the slots at the Tarm Ruins gate.
+
+NAVIGATING TARM RUINS:
+- Use seasonal tree stumps to change weather/season.
+- Push Armos statues and climb vines to progress.
+
+LOST WOODS PUZZLE:
+A Deku Scrub gives the solution:
+  "West, South, East, North - taking each step in a warmer season."
+  Translation: Go West (Winter), South (Spring), East (Summer),
+  North (Autumn). Change season on each stump before proceeding
+  in the indicated direction. If wrong, you loop back to start.
+
+After exiting Lost Woods, navigate final puzzle rooms.
+A hooded figure warns about consequences before Ancient Ruins.
+
+================================================================================
+16. DUNGEON 6: ANCIENT RUINS
+================================================================================
+
+LOCATION: Beyond Tarm Ruins / Lost Woods.
+ESSENCE: Blowing Wind
+DUNGEON ITEM: Magical Boomerang
+BOSS: Manhandla
+NOTE: Largest dungeon in both Oracle games.
+
+WALKTHROUGH:
+- North twice to reach rotating device.
+- East past blade traps. Cut crystals with sword for 5 rupees.
+- Bomb south wall for rupee cache.
+- Magnetic Gloves puzzle: Move N magnet north, Pegasus Seeds to
+  jump to top-left. Position magnet across gaps to top-right,
+  place on switch.
+- South twice, stairs at bottom-left, exit north for Dungeon Map.
+- Northwest corner via moving platforms for Compass (beware Beamos).
+- Cross bridge from floor switch for Bombs.
+- Push trampoline onto grey tile, go right for Magical Boomerang.
+- Wall-squeeze path + Pegasus Seeds for Boss Key.
+- BOSS - Manhandla: Plants are vulnerable to Magical Boomerang when
+  they open their mouths. Avoid quicksand. Defeat all mouths, then
+  strike the exposed central jewel with sword.
+- Collect Blowing Wind essence.
+
+================================================================================
+17. GRAVEYARD & PIRATE QUEST
+================================================================================
+
+PIRATE BELL QUEST:
+1. Travel to Horon Village, find skeleton pirate in hollow log east
+   of village.
+2. Go south from Horon fountain, descend stairs (burn trees if needed).
+   Use Magical Boomerang to hit switch, extend bridge to Subrosia
+   portal.
+3. In Subrosia, observe pirate's drawer-pushing pattern:
+   "3, 3, 2, 1, 1, 4, 4, 4"
+4. Travel to Samasa Desert. Use memorized pattern on skull gate.
+5. Find pirate ship in desert center. Discover ghost pirate's quest.
+6. Find pirate's skull at desert oasis. Carry skull near quicksand
+   pits until it opens/closes its mouth to identify correct pit.
+   Descend to retrieve Rusty Bell.
+7. Take bell to Subrosian Smithy for polishing. Becomes Pirate's Bell.
+8. Return bell to pirate captain. Ship sails ashore, granting access
+   to Graveyard and Explorer's Crypt area.
+
+================================================================================
+18. DUNGEON 7: EXPLORER'S CRYPT
+================================================================================
+
+LOCATION: Graveyard area.
+ESSENCE: Seed of Life
+DUNGEON ITEM: Roc's Cape (jump 2 tiles + glide)
+BOSS: Gleeok
+
+WALKTHROUGH:
+- Defeat Wizzrobes in eastern area for first key.
+- Trampoline mechanics on upper floors for second key.
+- Armos statue puzzle: "the non-living statue is random each time."
+  Push non-living statue onto switch to open door.
+- Defeat ghost (charges in straight line only) for Compass.
+- Conveyor belt section + block puzzles for Dungeon Map.
+- Moving platform navigation with magnetic glove manipulation for
+  Roc's Cape (replaces Roc's Feather - longer jump + glide).
+- Switch order puzzle: Press switches 3, 1, 2, 4 to arrange armos
+  on green tiles for a key.
+- Torch + magnetic switch puzzle: Pegasus Seeds for speed, reverse
+  polarity for upper platforms.
+- Boss Key: "Below me, red. To my right, red. Only I shall shine
+  blue." Coordinate switch hits to match owl statue requirements.
+  Pattern: bottom=red, right=red, self=blue.
+- Mini-Boss - Poe Sisters: Equip slingshot with Ember Seeds. Keep
+  four torches lit. If all torches go out, restart from entrance.
+- BOSS - Gleeok (2 phases):
+  Phase 1: Two-headed dragon. Use spin attacks to remove both heads
+  quickly.
+  Phase 2: Skeleton charges around room, ground-shakes on landing.
+  Dodge jumps, counter-attack when it charges.
+- Collect Seed of Life essence.
+
+================================================================================
+19. TEMPLE REMAINS
+================================================================================
+
+PRE-DUNGEON:
+- Piece of Heart in graveyard's northeast corner (seasonal changes +
+  Roc's Cape platforming).
+
+REACHING THE TEMPLE:
+- From North Horon, cross bridges and navigate hollow log.
+- Avoid Darknuts. Find sunken Temple of Seasons surface entrance.
+
+TEMPLE NAVIGATION:
+- Use seasonal transformations (autumn, winter, summer) at tree
+  stumps to access different areas.
+- Jump gaps with Roc's Cape.
+- Navigate seasonal hazards (fallen leaves, snow, etc.).
+
+VOLCANIC CATALYST:
+- Enter Subrosia through portal.
+- Throw a bomb into a special hole to trigger volcano eruption.
+- Lava fills the temple, creating new paths.
+
+POST-ERUPTION:
+- Piece of Heart: Roc's Cape over lava, bomb cracked wall.
+- Use Magnetic Gloves for magnetic passages.
+- Block-pushing puzzles and hidden enemy rooms.
+- Access volcano portal to reach Sword and Shield Maze.
+
+================================================================================
+20. DUNGEON 8: SWORD & SHIELD MAZE
+================================================================================
+
+LOCATION: Accessed through lava-flooded Temple Remains / Subrosia.
+ESSENCE: Changing Seasons
+DUNGEON ITEM: Hyper Slingshot (3-way shot)
+BOSS: Medusa Head (Medelock)
+
+WALKTHROUGH:
+- North then east. Shoot statue across gap with slingshot. Collect
+  key from ceiling.
+- NW chamber: Defeat Magnesus enemies. Use magnetic gloves to
+  position N magnet onto Hardhat Beetle for key.
+- Spark Corridor: Avoid moving Sparks. Unlock key block, descend
+  stairs. Navigate past Ropes and Keese on narrow paths.
+- Roller room: Roc's Cape to jump rollers, avoid Wallmasters.
+  Stairs at bottom-right.
+- Platform section: Jump across, avoid spinning flames. Moving
+  platform with flames from sides and center.
+- Blade trap area: Avoid giant blade traps and fire Keese. Activate
+  switch top-right. Southeast door leads to Compass.
+- Rotating device: Navigate directional chambers for Dungeon Map.
+- Defeat Armos statues, push block for Hyper Slingshot.
+- Ice Block Puzzle: Push ice blocks onto three yellow tiles on right.
+  Careful sequence required.
+- Armos statue: Stand still and wait until it wakes up.
+- Mini-Boss - Frypolar: Fire/ice creature. Attack during vulnerable
+  phase transitions.
+- Boss Key: After ice block puzzle and conveyor belt section.
+- BOSS - Medusa Head (Medelock): Stun with Pegasus Seeds. Avoid
+  spinning blue orbs and lasers. Repeat stunning + sword strikes.
+  Mystery Seeds also effective.
+- Collect Changing Seasons essence.
+
+POST-DUNGEON:
+- Maku Tree gives you the Huge Maku Seed.
+
+================================================================================
+21. ONOX'S CASTLE & FINAL BOSS
+================================================================================
+
+PREPARATION:
+- Stock up on potions, bombs, and seeds.
+- Ensure you have all 8 essences and the Huge Maku Seed.
+
+GETTING THERE:
+- Travel through North Horon to Northern Peak.
+- Huge Maku Seed penetrates the dark barrier.
+
+CASTLE INTERIOR:
+- Go north from entrance, killing ALL enemies in each room before
+  proceeding north. Rooms contain Wizzrobes, Darknuts, Wallmasters.
+- IMPORTANT: If you fail to kill all enemies, you get sent backward.
+- Side rooms have fairies but dangerous floor tiles. Stand in doorway
+  and use Magical Boomerang to grab fairies safely.
+
+MINI-BOSS REMATCH - FACADE:
+- Only vulnerable to bombs. Place bombs in center while dodging
+  beetles, fireballs, and floor hazards.
+
+BOSS FIGHT 1 - GENERAL ONOX:
+- Only vulnerable to spin attacks.
+- Attacks: Spiked mace swings, thrown projectiles, falling boulders,
+  crystal shield.
+- When Onox uses Din as a crystal shield, use the Rod of Seasons to
+  knock the crystal away without getting electrocuted.
+- Continue spin attacking until he falls.
+
+BOSS FIGHT 2 - DARK DRAGON ONOX:
+- Floor collapses. Onox transforms into a dragon.
+- Strategy: Jump onto his hand using Roc's Cape. Ride hand upward.
+  Strike the forehead jewel with spin attacks.
+- Dodge: Blue fire breath, red fireballs, claw swipes.
+- Use Pegasus Seeds for mobility.
+- Repeat: Mount hand > ride up > spin attack jewel.
+- Upon defeat, Din is rescued. Seasons return to normal.
+
+ENDING:
+- Watch the ending cutscene.
+- Note the Secret of Labrynna for Oracle of Ages linked game.
+
+================================================================================
+22. TRADING SEQUENCE (NOBLE SWORD)
+================================================================================
+
+This is entirely optional but gives a powerful sword upgrade.
+
+# | ITEM          | FROM NPC        | LOCATION           | HOW
+--|---------------|-----------------|--------------------|-----------------------
+1 | Cuccodex      | Mr. Write       | Horon Village      | Light torch w/ Ember Seed
+2 | Lon Lon Egg   | Malon           | North of Horon     | Give Cuccodex
+3 | Ghastly Doll  | Maple           | Random encounter   | Egg falls, she trades
+4 | Iron Pot      | Mrs. Ruul       | Horon Village      | Give Ghastly Doll
+5 | Lava Soup     | Subrosian Chef  | Subrosia (west)    | Give Iron Pot
+6 | Goron Vase    | Biggoron        | Goron Mountain     | Give Lava Soup
+7 | Fish          | Ingo            | Sunken City        | Give Goron Vase
+8 | Megaphone     | Cat Owner       | North Horon        | Give Fish
+9 | Mushroom      | Talon           | Mt. Cucco cave     | Use Megaphone to wake
+10| Wooden Bird   | Syrup           | Sunken City shop   | Give Mushroom
+11| Engine Grease | Tick Tock       | Horon Village      | Give Wooden Bird
+12| Phonograph    | Guru-Guru       | Eastern Suburbs    | Give Engine Grease
+
+FINAL STEP - NOBLE SWORD:
+- Take Phonograph to the music-loving Deku Scrub in the Lost Woods
+  area. He listens to the music and tells you how to find the
+  Noble Sword.
+- Path: North then west, stump > Winter > west, stump > Autumn >
+  west, stump > Spring > west, stump > Summer > Noble Sword chest.
+- NOTE: Give Mushroom to Syrup regardless - she sells Potions (300
+  rupees) afterward, which is very useful.
+
+================================================================================
+23. ANIMAL COMPANIONS
+================================================================================
+
+Three possible animal companions. You permanently get ONE based on
+which Strange Flute you obtain. Each has different abilities:
+
+RICKY (Kangaroo):
+- Default companion (if no flute purchased).
+- Abilities: Punch attack, tornado punch (charged), high jumps
+  over cliffs and holes.
+- Best for: Navigating cliffs and elevated terrain.
+
+DIMITRI (Dodongo):
+- Obtain: Get Strange Flute from Subrosia Dance Hall (play again
+  after winning Boomerang).
+- Abilities: Swim upstream, eat enemies, walk on shallow water.
+- Best for: Water navigation and crossing currents.
+
+MOOSH (Winged Bear):
+- Obtain: Buy Strange Flute from Horon Village shop (150 rupees).
+- Abilities: Fly/hover over pits and holes, ground pound attack.
+- Best for: Crossing large gaps and chasms.
+
+Each companion changes the overworld layout slightly in certain areas,
+creating different paths to dungeons based on which one you have.
+
+================================================================================
+24. ESSENCES OF NATURE SUMMARY
+================================================================================
+
+# | ESSENCE          | DUNGEON                | BOSS
+--|------------------|------------------------|-----------
+1 | Fertile Soil     | Gnarled Root Dungeon   | Aquamentus
+2 | Gift of Time     | Snake's Remains        | Dodongo
+3 | Bright Sun       | Poison Moth's Lair     | Mothula
+4 | Soothing Rain    | Dancing Dragon Dungeon | Gohma
+5 | Nurturing Warmth | Unicorn's Cave         | Digdogger
+6 | Blowing Wind     | Ancient Ruins          | Manhandla
+7 | Seed of Life     | Explorer's Crypt       | Gleeok
+8 | Changing Seasons | Sword & Shield Maze    | Medelock
+
+After collecting all 8, the Maku Tree produces the Huge Maku Seed.
+This seed breaks the dark barrier around Onox's Castle, allowing Link
+to enter and face the final battle against General Onox and his
+Dark Dragon form.
+
+================================================================================
+END OF WALKTHROUGH
+================================================================================
+Sources: Thonky.com, Zelda Dungeon, StrategyWiki, GameFAQs, Zelda Central

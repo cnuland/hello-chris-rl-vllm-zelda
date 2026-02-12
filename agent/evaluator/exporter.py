@@ -66,11 +66,13 @@ class EpisodeExporter:
         bucket: str = "zelda-episodes",
         frames_per_segment: int = 300,
         png_interval: int = 10,  # save PNG every N frames
+        epoch: int = 0,
     ):
         self._s3 = s3_client
         self._bucket = bucket
         self._frames_per_segment = frames_per_segment
         self._png_interval = png_interval
+        self._epoch = epoch
 
         # Buffer
         self._current_frames: list[FrameRecord] = []
@@ -142,7 +144,7 @@ class EpisodeExporter:
 
     def _upload_segment(self, seg: EpisodeSegment) -> None:
         """Upload segment to MinIO."""
-        prefix = f"{seg.episode_id}/{seg.segment_id}"
+        prefix = f"epoch_{self._epoch}/{seg.episode_id}/{seg.segment_id}"
 
         # Upload manifest
         manifest = {

@@ -102,7 +102,7 @@ class LLMClient:
                     {"type": "text", "text": json.dumps(game_state)},
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
                     },
                 ],
             },
@@ -204,6 +204,11 @@ class LLMClient:
                         "x-session-id": session_id,
                     },
                 )
+                if resp.status_code != 200:
+                    logger.warning(
+                        "LLM %s returned %d: %s",
+                        route, resp.status_code, resp.text[:500],
+                    )
                 resp.raise_for_status()
                 data = resp.json()
                 content = data["choices"][0]["message"]["content"]
