@@ -95,6 +95,8 @@ def create_ppo_config(
     envs_per_worker: int | None = None,
     batch_size: int | None = None,
     entropy_coeff: float | None = None,
+    lr: float | None = None,
+    use_lstm: bool = True,
 ) -> "PPOConfig":
     """Create Ray RLlib PPOConfig.
 
@@ -104,24 +106,49 @@ def create_ppo_config(
     Args:
         entropy_coeff: Override entropy coefficient for entropy scheduling.
             If None, uses 0.05 default.
+        lr: Override learning rate for LR scheduling.
+            If None, uses 3e-4 default.
+        use_lstm: Enable LSTM memory for sequential decision-making.
+            Pokemon Red paper showed GRU doubled quest completion rates.
     """
     from ray.rllib.algorithms.ppo import PPOConfig
-    from ray.rllib.models import ModelCatalog
-
-    from agent.rl.model import ZeldaMLPModel
-
-    ModelCatalog.register_custom_model("zelda_mlp", ZeldaMLPModel)
 
     n_workers = num_workers or int(os.getenv("RAY_WORKERS", "6"))
     n_envs = envs_per_worker or int(os.getenv("ENVS_PER_WORKER", "6"))
     bs = batch_size or int(os.getenv("BATCH_SIZE", "4096"))
     ent = entropy_coeff if entropy_coeff is not None else 0.05
+    learning_rate = lr if lr is not None else 3e-4
 
     if env_config is None:
         ep_len = int(os.getenv("EPISODE_LENGTH", str(2048 * 15)))
         env_config = make_env_config(max_steps=ep_len)
 
     callbacks_cls = _make_callbacks_class()
+
+    if use_lstm:
+        # Built-in model with LSTM — proper state management and
+        # sequence masking handled by RLlib. Separate policy/value
+        # networks via vf_share_layers=False.
+        model_config = {
+            "fcnet_hiddens": [256, 256],
+            "fcnet_activation": "relu",
+            "use_lstm": True,
+            "lstm_cell_size": 128,
+            "max_seq_len": 32,
+            "vf_share_layers": False,
+        }
+        logger.info("Using built-in model with LSTM (cell_size=128, seq_len=32)")
+    else:
+        # Custom MLP model without memory (original architecture)
+        from ray.rllib.models import ModelCatalog
+        from agent.rl.model import ZeldaMLPModel
+
+        ModelCatalog.register_custom_model("zelda_mlp", ZeldaMLPModel)
+        model_config = {
+            "custom_model": "zelda_mlp",
+            "fcnet_hiddens": [256],
+        }
+        logger.info("Using custom MLP model (no memory)")
 
     config = (
         PPOConfig()
@@ -142,15 +169,12 @@ def create_ppo_config(
             keep_per_episode_custom_metrics=True,
         )
         .training(
-            model={
-                "custom_model": "zelda_mlp",
-                "fcnet_hiddens": [256],
-            },
-            lr=5e-5,
+            model=model_config,
+            lr=learning_rate,
             gamma=0.999,
             lambda_=0.95,
             clip_param=0.2,
-            vf_clip_param=200.0,
+            vf_clip_param=50.0,
             entropy_coeff=ent,
             train_batch_size_per_learner=bs,
             minibatch_size=min(bs, 2048),

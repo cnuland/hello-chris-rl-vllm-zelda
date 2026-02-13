@@ -21,18 +21,35 @@ class ObservationConfig(BaseModel):
 
 
 class RewardConfig(BaseModel):
-    rupee: float = 0.05
-    key: float = 2.0
-    death: float = -5.0
-    health_loss: float = -0.02
+    rupee: float = 0.01
+    key: float = 0.5
+    death: float = -1.0
+    health_loss: float = -0.005
     time_penalty: float = 0.0
-    new_room: float = 200.0
+    new_room: float = 3.0
     movement: float = 0.1
-    grid_exploration: float = 2.0
-    revisit: float = 0.0
-    maku_tree: float = 500.0
-    sword: float = 500.0
-    dungeon: float = 500.0
+    grid_exploration: float = 0.02
+    maku_tree: float = 15.0
+    sword: float = 15.0
+    dungeon: float = 15.0
+    exit_seeking: float = 0.5
+    dungeon_entry: float = 15.0
+    maku_tree_visit: float = 15.0
+    indoor_entry: float = 5.0
+    dungeon_floor: float = 2.0
+    dialog_bonus: float = 1.0
+    maku_dialog: float = 30.0
+    gnarled_key: float = 30.0
+    distance_bonus: float = 2.0
+    directional_bonus: float = 3.0
+    directional_decay: float = 0.999
+    coord_decay_factor: float = 0.9998
+    coord_decay_floor: float = 0.15
+    area_boost_overworld: float = 1.0
+    area_boost_subrosia: float = 1.5
+    area_boost_maku: float = 3.0
+    area_boost_indoors: float = 1.5
+    area_boost_dungeon: float = 2.0
 
 
 class LLMConfig(BaseModel):

@@ -47,6 +47,7 @@ MODEL_ROUTES = {
     "dialog": os.getenv("LLM_DIALOG_MODEL", "qwen25-7b"),
     "puzzle": os.getenv("LLM_PUZZLE_MODEL", "qwen25-32b"),
     "state": os.getenv("LLM_STATE_MODEL", "qwen25-7b"),
+    "advisor": os.getenv("LLM_ADVISOR_MODEL", "qwen25-32b"),
 }
 
 
@@ -155,6 +156,24 @@ class LLMClient:
             {"role": "user", "content": json.dumps(game_state)},
         ]
         return self._call("state", messages, max_tokens=256, temperature=0.1)
+
+    def advise(self, prompt: str) -> dict[str, Any]:
+        """Call /advisor route for reward parameter tuning advice.
+
+        Returns parsed JSON with multipliers and rationale.
+        """
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a reward engineering advisor for a reinforcement learning "
+                    "agent. Analyze the training stats and output JSON with reward "
+                    "parameter multipliers. Output ONLY valid JSON."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ]
+        return self._call("advisor", messages, max_tokens=512, temperature=0.3)
 
     # ------------------------------------------------------------------
     # Internal

@@ -85,6 +85,7 @@ class ZeldaEnv(gym.Env):
         save_state_path: str | None = None,
         render_mode: str | None = None,
         seed: int | None = None,
+        god_mode: bool = False,
     ):
         super().__init__()
         self.rom_path = rom_path
@@ -94,6 +95,7 @@ class ZeldaEnv(gym.Env):
         self._save_state_path = save_state_path or None
         self.render_mode = render_mode
         self._seed = seed
+        self._god_mode = god_mode
 
         # Lazy PyBoy init — deferred to first reset()
         self._pyboy = None
@@ -395,6 +397,29 @@ class ZeldaEnv(gym.Env):
 
         return dist_up, dist_down, dist_left, dist_right, dir_x, dir_y
 
+    def collision_map_5x4(self) -> tuple:
+        """Return 5×4 downsampled collision map (20 floats).
+
+        The 10×8 playable tile grid is reduced to 5×4 using 2×2 max-pooling:
+        a block is 1.0 if ANY tile in the 2×2 region is walkable, else 0.0.
+        Gives the agent a spatial map of the room layout.
+        """
+        result = []
+        for by in range(4):
+            for bx in range(5):
+                walkable = 0.0
+                for dy in range(2):
+                    for dx in range(2):
+                        x = bx * 2 + dx
+                        y = by * 2 + dy
+                        if self._read(_ROOM_COLLISIONS + y * 16 + x) in _WALKABLE_TILES:
+                            walkable = 1.0
+                            break
+                    if walkable:
+                        break
+                result.append(walkable)
+        return tuple(result)
+
     @property
     def active_tile_type(self) -> int:
         return self._read(_ACTIVE_TILE_TYPE)
@@ -476,6 +501,10 @@ class ZeldaEnv(gym.Env):
         # the game engine (clean save state, no mid-fade hacks needed).
         for _ in range(self.frame_skip):
             self._pyboy.tick()
+            # God mode: write max health every tick to prevent death.
+            # Isolates exploration learning from survival (curriculum).
+            if self._god_mode:
+                self._pyboy.memory[_HEALTH] = self._pyboy.memory[_MAX_HEALTH]
 
         self._last_action = act
 

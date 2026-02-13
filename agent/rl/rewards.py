@@ -14,21 +14,30 @@ import numpy as np
 
 @dataclass
 class CoverageReward:
-    """Track tile coverage per room and award first-visit bonuses.
+    """Track coordinate coverage with decay-based re-exploration.
 
-    Tiles are binned into 8×8 grids within each room (160×144 screen
-    → 20×18 tiles → 8×8 bins ≈ 2-3 tiles per bin).
+    Uses fine-grained (room_id, tile_x, tile_y) coordinate tracking
+    inspired by PokemonRedExperiments' seen_coords approach.  Each
+    16×16-pixel tile position is a unique coordinate, giving ~80 coords
+    per room (10 cols × 8 rows).
 
-    Coordinate decay (inspired by pokemonred_puffer): tile exploration
-    bonus decays by decay_factor each step, discouraging circling behavior
-    while still rewarding genuinely new discoveries.
+    Coordinate decay (pokemonred_puffer style): each coord tracks its
+    last visit step. "Freshness" is computed analytically as
+    decay_factor^(steps_since_visit).  Revisiting a decayed coord
+    yields partial reward: bonus * (1 - freshness).  This means:
+      - First visit: full bonus (freshness = 0)
+      - Immediate revisit: zero bonus (freshness = 1.0)
+      - After ~10K steps: 85% bonus (freshness decayed to floor)
+
+    O(1) per step — no need to iterate all coords for decay.
     """
 
-    bonus_per_tile: float = 2.0
-    bonus_per_room: float = 200.0
-    revisit_penalty: float = 0.0
-    decay_factor: float = 0.9999  # Tile bonus decays over time
-    _visited: dict[int, set[tuple[int, int]]] = field(default_factory=dict)
+    bonus_per_tile: float = 0.02
+    bonus_per_room: float = 3.0
+    coord_decay_factor: float = 0.9998
+    coord_decay_floor: float = 0.15
+    # coord → step number of last visit
+    _seen_coords: dict[tuple[int, int, int], int] = field(default_factory=dict)
     _visited_rooms: set[int] = field(default_factory=set)
     _step_count: int = 0
 
@@ -37,35 +46,33 @@ class CoverageReward:
         reward = 0.0
         self._step_count += 1
 
-        # Decay multiplier — tile bonus decays over time to discourage circling
-        decay = self.decay_factor ** self._step_count
-
-        # New room bonus — flat per room (no decay)
-        # Constant reward per room reduces variance between episodes;
-        # escalating bonuses caused mean reward to be dominated by
-        # stochastic room count rather than policy quality.
+        # New room bonus — flat per room
         if room_id not in self._visited_rooms:
             self._visited_rooms.add(room_id)
             reward += self.bonus_per_room
 
-        # Tile bin (8×8 grid)
-        bin_x = pixel_x // 20  # 160 / 8 = 20
-        bin_y = pixel_y // 18  # 144 / 8 = 18
-        tile = (bin_x, bin_y)
+        # Fine-grained coordinate: (room_id, tile_x, tile_y)
+        tile_x = pixel_x // 16
+        tile_y = pixel_y // 16
+        coord = (room_id, tile_x, tile_y)
 
-        if room_id not in self._visited:
-            self._visited[room_id] = set()
-
-        if tile not in self._visited[room_id]:
-            self._visited[room_id].add(tile)
-            reward += self.bonus_per_tile * decay
+        if coord not in self._seen_coords:
+            # First visit — full bonus
+            reward += self.bonus_per_tile
         else:
-            reward += self.revisit_penalty
+            # Revisit — partial bonus based on decay since last visit
+            steps_since = self._step_count - self._seen_coords[coord]
+            freshness = self.coord_decay_factor ** steps_since
+            freshness = max(self.coord_decay_floor, freshness)
+            reward += self.bonus_per_tile * (1.0 - freshness)
+
+        # Record this visit
+        self._seen_coords[coord] = self._step_count
 
         return reward
 
     def reset(self) -> None:
-        self._visited.clear()
+        self._seen_coords.clear()
         self._visited_rooms.clear()
         self._step_count = 0
 
@@ -75,7 +82,7 @@ class CoverageReward:
 
     @property
     def total_tiles(self) -> int:
-        return sum(len(tiles) for tiles in self._visited.values())
+        return len(self._seen_coords)
 
 
 class RNDCuriosity:

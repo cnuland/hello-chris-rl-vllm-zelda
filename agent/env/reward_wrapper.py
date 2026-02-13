@@ -55,32 +55,33 @@ class RewardWrapper(gym.Wrapper):
         super().__init__(env)
         cfg = reward_config or {}
 
-        # Game event reward scales
-        self._rupee_scale = cfg.get("rupee", 0.05)
-        self._key_scale = cfg.get("key", 2.0)
-        self._death_penalty = cfg.get("death", -5.0)
-        self._health_loss_scale = cfg.get("health_loss", -0.02)
+        # Game event reward scales — flattened to reduce dynamic range
+        # (Pokemon Red projects use ~1000:1 max ratio vs our old ~50000:1)
+        self._rupee_scale = cfg.get("rupee", 0.01)
+        self._key_scale = cfg.get("key", 0.5)
+        self._death_penalty = cfg.get("death", -1.0)
+        self._health_loss_scale = cfg.get("health_loss", -0.005)
         self._time_penalty = cfg.get("time_penalty", 0.0)
-        self._sword_bonus = cfg.get("sword", 500.0)
-        self._dungeon_bonus = cfg.get("dungeon", 500.0)
-        self._maku_tree_bonus = cfg.get("maku_tree", 500.0)
+        self._sword_bonus = cfg.get("sword", 15.0)
+        self._dungeon_bonus = cfg.get("dungeon", 15.0)
+        self._maku_tree_bonus = cfg.get("maku_tree", 15.0)
 
         # Progression reward scales
-        self._dungeon_entry_bonus = 500.0
-        self._maku_tree_visit_bonus = 500.0
-        self._indoor_entry_bonus = 200.0
-        self._dungeon_floor_bonus = 50.0
+        self._dungeon_entry_bonus = cfg.get("dungeon_entry", 15.0)
+        self._maku_tree_visit_bonus = cfg.get("maku_tree_visit", 15.0)
+        self._indoor_entry_bonus = cfg.get("indoor_entry", 5.0)
+        self._dungeon_floor_bonus = cfg.get("dungeon_floor", 2.0)
 
         # Dialog interaction reward — teaches the agent that NPC dialog is
         # valuable (required for quest progression: Maku Tree gives Gnarled Key)
-        self._dialog_bonus = 20.0
+        self._dialog_bonus = cfg.get("dialog_bonus", 1.0)
         self._dialog_rooms: set[int] = set()
         self._prev_dialog_active = False
 
-        # Maku Tree quest milestone rewards — massive one-time bonuses for
+        # Maku Tree quest milestone rewards — one-time bonuses for
         # critical quest progression (oracles-disasm confirmed addresses)
-        self._maku_dialog_bonus = 1000.0    # Maku Tree gave Gnarled Key quest
-        self._gnarled_key_bonus = 1000.0    # Picked up the Gnarled Key item
+        self._maku_dialog_bonus = cfg.get("maku_dialog", 30.0)
+        self._gnarled_key_bonus = cfg.get("gnarled_key", 30.0)
         self._prev_maku_dialog = False
         self._prev_gnarled_key = False
 
@@ -88,7 +89,7 @@ class RewardWrapper(gym.Wrapper):
         # rooms further from the starting position (pokemonred_puffer style).
         # Only active in overworld (group 0) to avoid reward spikes from
         # non-overworld room IDs that are in completely different ranges.
-        self._distance_bonus = 200.0
+        self._distance_bonus = cfg.get("distance_bonus", 2.0)
         self._max_distance = 0
         self._start_row = 0
         self._start_col = 0
@@ -98,8 +99,8 @@ class RewardWrapper(gym.Wrapper):
         # Decays per step (0.999^step) so it's strong early (guiding toward
         # Maku Tree) but fades by mid-episode, allowing westward movement
         # to reach Dungeon 1 after completing the Maku Tree sequence.
-        self._directional_bonus = 300.0
-        self._directional_decay = 0.999  # ~37% at 1K steps, ~5% at 3K
+        self._directional_bonus = cfg.get("directional_bonus", 3.0)
+        self._directional_decay = cfg.get("directional_decay", 0.999)
         self._min_row_reached = 0
         self._max_col_reached = 0
 
@@ -115,11 +116,25 @@ class RewardWrapper(gym.Wrapper):
         self._menu_steps = 0
         self._menu_grace = 30     # Steps allowed in menu without penalty
         self._menu_max = 60       # Auto-dismiss menu after this many steps
-        self._menu_penalty = -0.5 # Per-step penalty after grace period
+        self._menu_penalty = -0.05 # Per-step penalty after grace period
 
         # Exit-seeking shaping — continuous reward for moving toward FRONTIER exits
-        self._exit_seeking_scale = cfg.get("exit_seeking", 5.0)
+        self._exit_seeking_scale = cfg.get("exit_seeking", 0.5)
         self._prev_exit_dist = 0
+
+        # Area-based exploration boost — multiplies coverage reward by
+        # active_group to guide exploration toward key progression areas.
+        # Inspired by pokemonred_puffer's map-specific exploration weights.
+        # Group 0 (overworld) = 1.0x, Group 2 (maku tree) = 3.0x,
+        # Group 3 (indoors/NPCs) = 1.5x, Group 4-5 (dungeons) = 2.0x.
+        self._area_boost = {
+            0: cfg.get("area_boost_overworld", 1.0),
+            1: cfg.get("area_boost_subrosia", 1.5),
+            2: cfg.get("area_boost_maku", 3.0),
+            3: cfg.get("area_boost_indoors", 1.5),
+            4: cfg.get("area_boost_dungeon", 2.0),
+            5: cfg.get("area_boost_dungeon", 2.0),
+        }
 
         # Backtrack penalty — discourage re-entering recently visited rooms
         self._recent_rooms: deque[int] = deque(maxlen=5)
@@ -128,9 +143,10 @@ class RewardWrapper(gym.Wrapper):
 
         # Sub-reward modules
         self._coverage = CoverageReward(
-            bonus_per_tile=cfg.get("grid_exploration", 0.1),
-            bonus_per_room=cfg.get("new_room", 300.0),
-            revisit_penalty=cfg.get("revisit", 0.0),
+            bonus_per_tile=cfg.get("grid_exploration", 0.02),
+            bonus_per_room=cfg.get("new_room", 3.0),
+            coord_decay_factor=cfg.get("coord_decay_factor", 0.9998),
+            coord_decay_floor=cfg.get("coord_decay_floor", 0.15),
         )
 
         self._rnd = RNDCuriosity() if enable_rnd else None
@@ -312,11 +328,14 @@ class RewardWrapper(gym.Wrapper):
         # while transiting through known rooms to reach new areas.  Tile-based
         # allows transit (new tiles are found even in visited rooms) while
         # still ending episodes where the agent circles the same tiles.
+        # Dialog steps don't count toward stagnation — NPC dialog is
+        # productive (quest progression) and shouldn't trigger truncation.
         new_rooms = self._coverage.unique_rooms
         new_tiles = self._coverage.total_tiles
+        dialog_active = info.get("dialog_active", False)
         if new_tiles > self._prev_total_tiles:
             self._steps_since_discovery = 0
-        else:
+        elif not dialog_active:
             self._steps_since_discovery += 1
         self._prev_total_tiles = new_tiles
 
@@ -358,6 +377,7 @@ class RewardWrapper(gym.Wrapper):
         info["stagnation_steps"] = self._steps_since_discovery
         info["unique_rooms"] = new_rooms
         info["unique_tiles"] = self._coverage.total_tiles
+        info["seen_coords"] = self._coverage.total_tiles  # Pokemon Red-style coord count
         info["max_distance"] = self._max_distance
 
         # Progression milestones (available every step, reported at episode end)
@@ -530,13 +550,14 @@ class RewardWrapper(gym.Wrapper):
                     reward += dir_bonus * rows_north
                     self._min_row_reached = cur_row
 
-            # Coverage reward
+            # Coverage reward with area-based boost
             coverage = self._coverage.step(
                 info.get("room_id", 0),
                 info.get("pixel_x", 0),
                 info.get("pixel_y", 0),
             )
-            reward += coverage
+            area_mult = self._area_boost.get(active_group, 1.0)
+            reward += coverage * area_mult
 
             # RND curiosity
             if self._rnd is not None:

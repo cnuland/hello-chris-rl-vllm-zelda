@@ -99,6 +99,7 @@ def make_wrapped_env(config: dict):
             "save_state_path",
             "render_mode",
             "seed",
+            "god_mode",
         )
     }
     base_env = ZeldaEnv(**env_config)
@@ -123,6 +124,15 @@ def compute_entropy(epoch: int, start_epoch: int, max_epochs: int,
         return entropy_start
     progress = (epoch - start_epoch) / (max_epochs - 1)
     return entropy_start + (entropy_end - entropy_start) * progress
+
+
+def compute_lr(epoch: int, start_epoch: int, max_epochs: int,
+               lr_start: float, lr_end: float) -> float:
+    """Linear learning rate decay across epochs."""
+    if max_epochs <= 1:
+        return lr_start
+    progress = (epoch - start_epoch) / (max_epochs - 1)
+    return lr_start + (lr_end - lr_start) * progress
 
 
 def clean_minio():
@@ -228,13 +238,18 @@ def _download_s3_checkpoint(s3_path: str, s3_fs) -> str:
 
 def run_training_epoch(
     epoch, start_epoch, epoch_steps, n_workers, n_envs, ep_length,
-    rm_path, prev_checkpoint, entropy_coeff
+    rm_path, prev_checkpoint, entropy_coeff, reward_config=None,
+    god_mode_epochs=0, lr=None
 ):
     """Run one epoch of PPO training. Returns best checkpoint path."""
+    # God mode curriculum: infinite health for first N epochs to isolate
+    # exploration learning from survival (inspired by Pokemon Red RL).
+    god_mode = epoch < (start_epoch + god_mode_epochs)
+
     env_config = {
         "rom_path": os.getenv("ROM_PATH", "roms/zelda.gbc"),
         "headless": True,
-        "frame_skip": 4,
+        "frame_skip": 8,
         "max_steps": ep_length,
         "render_mode": "rgb_array",
         "save_state_path": os.getenv("SAVE_STATE_PATH", ""),
@@ -243,20 +258,29 @@ def run_training_epoch(
         "enable_shaping": bool(rm_path),
         "reward_model_path": rm_path,
         "enable_export": True,
-        "stagnation_limit": 5000,  # Truncate after 5K steps without new tile
+        "stagnation_limit": 2000,  # Truncate after 2K steps without new coord
+        "god_mode": god_mode,
     }
+
+    # Pass LLM-adjusted reward config to workers (None = use defaults)
+    if reward_config:
+        env_config["reward_config"] = reward_config
+        logger.info("Using LLM-adjusted reward config with %d parameters", len(reward_config))
 
     config = create_ppo_config(
         env_config=env_config,
         num_workers=n_workers,
         envs_per_worker=n_envs,
         entropy_coeff=entropy_coeff,
+        lr=lr,
     )
 
     logger.info("=== EPOCH %d TRAINING ===", epoch)
     logger.info("Workers: %d, Envs/worker: %d", n_workers, n_envs)
     logger.info("Epoch timesteps: %s (per-epoch stopper)", f"{epoch_steps:,}")
-    logger.info("Episode length: %s, Entropy: %.4f", f"{ep_length:,}", entropy_coeff)
+    logger.info("Episode length: %s, Entropy: %.4f, LR: %.2e", f"{ep_length:,}", entropy_coeff, lr or 3e-4)
+    if god_mode:
+        logger.info("GOD MODE: enabled (epoch %d < %d)", epoch, start_epoch + god_mode_epochs)
     if rm_path:
         logger.info("Reward model shaping: %s", rm_path)
 
@@ -597,6 +621,96 @@ def download_reward_model(epoch):
         return ""
 
 
+def run_reward_advisor(epoch: int, epoch_metadata: dict) -> dict | None:
+    """Run the LLM reward advisor to adjust reward weights for the next epoch.
+
+    Args:
+        epoch: Current epoch number (just completed).
+        epoch_metadata: Training metadata dict with reward_mean, milestones, etc.
+
+    Returns:
+        Updated reward config dict, or None if advisor fails/skips.
+    """
+    run_advisor = os.getenv("RUN_ADVISOR", "true").lower() in ("true", "1", "yes")
+    if not run_advisor:
+        logger.info("Reward advisor disabled (RUN_ADVISOR=false)")
+        return None
+
+    logger.info("=== EPOCH %d REWARD ADVISOR ===", epoch)
+
+    try:
+        from agent.evaluator.reward_advisor import RewardAdvisor
+        from agent.planner.llm_client import LLMClient
+        from agent.utils.config import RewardConfig, S3Config
+        from agent.utils.s3 import S3Client
+
+        walkthrough_path = os.getenv("WALKTHROUGH_PATH", "data/zelda_oos_walkthrough.txt")
+        llm = LLMClient()
+        advisor = RewardAdvisor(
+            llm_client=llm,
+            walkthrough_path=walkthrough_path if os.path.exists(walkthrough_path) else None,
+        )
+
+        # Gather segment summaries from this epoch's evaluation scores
+        segment_summaries = []
+        try:
+            s3 = S3Client(S3Config())
+            scores_key = f"scores/epoch_{epoch}/scores.jsonl"
+            scores_data = s3.download_bytes("zelda-episodes", scores_key)
+            lines = scores_data.decode().strip().split("\n")
+            for line in lines[:5]:
+                seg = json.loads(line)
+                segment_summaries.append({
+                    "rooms": seg.get("scores", {}).get("progress", 0),
+                    "dialog_count": seg.get("scores", {}).get("dialog", 0),
+                    "area": "overworld",
+                    "total_reward": seg.get("weighted_score", 0),
+                    "scores": seg.get("scores", {}),
+                })
+        except Exception as e:
+            logger.info("Could not load segment scores for advisor: %s", e)
+
+        # Get multipliers from LLM
+        multipliers = advisor.advise(epoch_metadata, segment_summaries)
+
+        if not multipliers:
+            logger.info("Advisor returned no multipliers — keeping defaults")
+            llm.close()
+            return None
+
+        # Apply multipliers to base config
+        base = RewardConfig().model_dump()
+        updated = advisor.apply_multipliers(base, multipliers)
+
+        # Upload advice to MinIO for auditing
+        try:
+            s3 = S3Client(S3Config())
+            advice_data = {
+                "epoch": epoch,
+                "multipliers": multipliers,
+                "base_config": RewardConfig().model_dump(),
+                "updated_config": updated,
+                "epoch_stats": epoch_metadata,
+            }
+            s3.upload_bytes(
+                "zelda-models",
+                f"advice/epoch_{epoch}/advice.json",
+                json.dumps(advice_data, indent=2).encode(),
+            )
+            logger.info("Saved reward advice to MinIO: advice/epoch_%d/advice.json", epoch)
+        except Exception as e:
+            logger.warning("Could not save advice to MinIO: %s", e)
+
+        llm.close()
+
+        logger.info("Reward advisor complete — %d parameters adjusted", len(multipliers))
+        return updated
+
+    except Exception as e:
+        logger.error("Reward advisor failed: %s", e, exc_info=True)
+        return None
+
+
 def main():
     start_epoch = int(os.getenv("EPOCH", "0"))
     max_epochs = int(os.getenv("MAX_EPOCHS", "48"))
@@ -610,6 +724,13 @@ def main():
     # Entropy scheduling parameters
     entropy_start = float(os.getenv("ENTROPY_START", "0.05"))
     entropy_end = float(os.getenv("ENTROPY_END", "0.015"))
+
+    # God mode curriculum: infinite health for first N epochs
+    god_mode_epochs = int(os.getenv("GOD_MODE_EPOCHS", "6"))
+
+    # LR scheduling parameters
+    lr_start = float(os.getenv("LR_START", "3e-4"))
+    lr_end = float(os.getenv("LR_END", "1e-5"))
 
     # Register wrapped env
     from ray.tune.registry import register_env as ray_register
@@ -626,7 +747,9 @@ def main():
         f"{epoch_steps:,}",
     )
     logger.info("Entropy schedule: %.4f → %.4f", entropy_start, entropy_end)
-    logger.info("Gamma: 0.999, Stagnation limit: 5000 steps (tile-based)")
+    logger.info("LR schedule: %.2e → %.2e", lr_start, lr_end)
+    logger.info("God mode curriculum: first %d epochs", god_mode_epochs)
+    logger.info("Gamma: 0.999, Stagnation limit: 2000 steps (coord-based)")
     logger.info("Evaluation: %s", "enabled" if run_eval else "disabled")
 
     # Clean old MinIO data for fresh start
@@ -642,14 +765,16 @@ def main():
     # restores from the best-ever checkpoint instead of the collapsed one.
     global_best_checkpoint = prev_checkpoint
     global_best_mean = -float("inf")
+    reward_config = None  # LLM advisor will populate after first epoch
 
     for epoch in range(start_epoch, start_epoch + max_epochs):
         logger.info("=" * 60)
         logger.info("  EPOCH %d / %d", epoch, start_epoch + max_epochs - 1)
         logger.info("=" * 60)
 
-        # Compute scheduled entropy for this epoch
+        # Compute scheduled entropy and LR for this epoch
         entropy = compute_entropy(epoch, start_epoch, max_epochs, entropy_start, entropy_end)
+        scheduled_lr = compute_lr(epoch, start_epoch, max_epochs, lr_start, lr_end)
 
         # Phase 1: Training — always restore from the global best
         checkpoint, mean_reward = run_training_epoch(
@@ -662,6 +787,9 @@ def main():
             rm_path,
             global_best_checkpoint,
             entropy,
+            reward_config=reward_config,
+            god_mode_epochs=god_mode_epochs,
+            lr=scheduled_lr,
         )
 
         # Update global best if this epoch improved
@@ -688,6 +816,23 @@ def main():
                 logger.info("Next epoch will use reward model shaping")
             else:
                 logger.info("Next epoch runs without shaping")
+
+            # Phase 3b: LLM reward advisor — adjust reward weights for next epoch
+            epoch_metadata = {}
+            metadata_path = os.path.join("/tmp", f"epoch_{epoch}_metadata.json")
+            try:
+                with open(metadata_path) as f:
+                    epoch_metadata = json.load(f)
+            except Exception as e:
+                logger.warning("Could not load epoch metadata: %s", e)
+                epoch_metadata = {"epoch": epoch, "reward_mean": mean_reward}
+
+            advised_config = run_reward_advisor(epoch, epoch_metadata)
+            if advised_config:
+                reward_config = advised_config
+                logger.info("Next epoch will use LLM-adjusted reward config")
+            else:
+                logger.info("Next epoch keeps current reward config")
 
         # Phase 4: Clean up storage to prevent MinIO disk-full crashes
         cleanup_after_epoch(epoch, global_best_checkpoint)

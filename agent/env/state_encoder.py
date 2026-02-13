@@ -235,7 +235,15 @@ def encode_vector(env: ZeldaEnv) -> np.ndarray:
     v[idx + 1] = min(any_d / 16.0, 1.0) if any_d < 999 else 1.0
     idx += 2
 
-    # Remaining slots (idx should be ~90) stay zero-filled
+    # --- Room collision map (dims 90-109) ---
+    # 5×4 downsampled collision grid: 1.0 = walkable, 0.0 = blocked.
+    # Gives the agent a spatial map of the room without needing a CNN.
+    collision = env.collision_map_5x4()
+    for ci in range(20):
+        v[idx] = collision[ci]
+        idx += 1
+
+    # Remaining slots (idx should be ~110) stay zero-filled
     return np.clip(v, 0.0, 1.0)
 
 
