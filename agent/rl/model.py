@@ -10,12 +10,15 @@ from ray.rllib.utils.annotations import override
 
 
 class ZeldaMLPModel(TorchModelV2, nn.Module):
-    """Simple 3-layer MLP with separate policy and value heads.
+    """MLP with separate policy and value networks.
 
     Input: 128-D vector observation.
-    Shared: 3×Linear(256) + ReLU.
-    Policy head: Linear(256) → num_actions logits.
-    Value head: Linear(256) → 1 scalar.
+    Policy net: 3×Linear(256) + ReLU → num_actions logits.
+    Value net:  3×Linear(256) + ReLU → 1 scalar.
+
+    Separate trunks prevent value gradients from corrupting the policy,
+    which is critical when reward variance is high (room bonuses are
+    sparse and large).
     """
 
     def __init__(self, obs_space, action_space, num_outputs, model_config, name):
@@ -25,7 +28,8 @@ class ZeldaMLPModel(TorchModelV2, nn.Module):
         in_size = int(np.prod(obs_space.shape))
         hidden = model_config.get("fcnet_hiddens", [256])[0]
 
-        self.shared = nn.Sequential(
+        # Separate policy network
+        self.policy_net = nn.Sequential(
             nn.Linear(in_size, hidden),
             nn.ReLU(),
             nn.Linear(hidden, hidden),
@@ -34,28 +38,45 @@ class ZeldaMLPModel(TorchModelV2, nn.Module):
             nn.ReLU(),
         )
         self.policy_head = nn.Linear(hidden, num_outputs)
+
+        # Separate value network
+        self.value_net = nn.Sequential(
+            nn.Linear(in_size, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+        )
         self.value_head = nn.Linear(hidden, 1)
 
-        # Orthogonal init
-        for layer in self.shared:
+        # Orthogonal init — policy net
+        for layer in self.policy_net:
             if isinstance(layer, nn.Linear):
                 nn.init.orthogonal_(layer.weight, gain=np.sqrt(2))
                 nn.init.zeros_(layer.bias)
         nn.init.orthogonal_(self.policy_head.weight, gain=0.01)
         nn.init.zeros_(self.policy_head.bias)
+
+        # Orthogonal init — value net
+        for layer in self.value_net:
+            if isinstance(layer, nn.Linear):
+                nn.init.orthogonal_(layer.weight, gain=np.sqrt(2))
+                nn.init.zeros_(layer.bias)
         nn.init.orthogonal_(self.value_head.weight, gain=1.0)
         nn.init.zeros_(self.value_head.bias)
 
-        self._features = None
+        self._obs = None
 
     @override(TorchModelV2)
     def forward(self, input_dict, state, seq_lens):
-        obs = input_dict["obs_flat"].float()
-        self._features = self.shared(obs)
-        logits = self.policy_head(self._features)
+        self._obs = input_dict["obs_flat"].float()
+        features = self.policy_net(self._obs)
+        logits = self.policy_head(features)
         return logits, state
 
     @override(TorchModelV2)
     def value_function(self):
-        assert self._features is not None, "forward() must be called first"
-        return self.value_head(self._features).squeeze(-1)
+        assert self._obs is not None, "forward() must be called first"
+        features = self.value_net(self._obs)
+        return self.value_head(features).squeeze(-1)

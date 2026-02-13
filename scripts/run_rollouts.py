@@ -243,7 +243,7 @@ def run_training_epoch(
         "enable_shaping": bool(rm_path),
         "reward_model_path": rm_path,
         "enable_export": True,
-        "stagnation_limit": 3000,  # Truncate after 3K steps without new room
+        "stagnation_limit": 5000,  # Truncate after 5K steps without new tile
     }
 
     config = create_ppo_config(
@@ -622,7 +622,7 @@ def main():
         f"{epoch_steps:,}",
     )
     logger.info("Entropy schedule: %.4f → %.4f", entropy_start, entropy_end)
-    logger.info("Gamma: 0.999, Stagnation limit: 5000 steps")
+    logger.info("Gamma: 0.999, Stagnation limit: 5000 steps (tile-based)")
     logger.info("Evaluation: %s", "enabled" if run_eval else "disabled")
 
     # Clean old MinIO data for fresh start

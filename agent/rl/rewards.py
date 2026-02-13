@@ -27,7 +27,7 @@ class CoverageReward:
     bonus_per_tile: float = 2.0
     bonus_per_room: float = 200.0
     revisit_penalty: float = 0.0
-    decay_factor: float = 0.9995  # Tile bonus decays over time
+    decay_factor: float = 0.9999  # Tile bonus decays over time
     _visited: dict[int, set[tuple[int, int]]] = field(default_factory=dict)
     _visited_rooms: set[int] = field(default_factory=set)
     _step_count: int = 0

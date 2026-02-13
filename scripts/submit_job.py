@@ -21,12 +21,12 @@ DASHBOARD_URL = os.getenv("RAY_DASHBOARD_URL", "http://localhost:8265")
 
 ENV_VARS = {
     "EPOCH": "0",
-    "MAX_EPOCHS": "48",
-    "EPOCH_STEPS": "5000000",
+    "MAX_EPOCHS": "1",
+    "EPOCH_STEPS": "100000000",
     "RAY_WORKERS": "20",
     "ENVS_PER_WORKER": "5",
     "EPISODE_LENGTH": "30000",
-    "BATCH_SIZE": "12288",
+    "BATCH_SIZE": "204800",
     "REWARD_MODEL_PATH": "",
     "RUN_EVAL": "true",
     "CLEAN_START": "false",

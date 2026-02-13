@@ -130,7 +130,7 @@ def create_ppo_config(
         .env_runners(
             num_env_runners=n_workers,
             num_envs_per_env_runner=n_envs,
-            rollout_fragment_length="auto",
+            rollout_fragment_length=2048,
             sample_timeout_s=300.0,
         )
         .callbacks(callbacks_cls)
@@ -142,15 +142,15 @@ def create_ppo_config(
                 "custom_model": "zelda_mlp",
                 "fcnet_hiddens": [256],
             },
-            lr=1e-4,
+            lr=5e-5,
             gamma=0.999,
             lambda_=0.95,
             clip_param=0.2,
             vf_clip_param=200.0,
             entropy_coeff=ent,
             train_batch_size_per_learner=bs,
-            minibatch_size=min(bs, 512),
-            num_epochs=4,
+            minibatch_size=min(bs, 2048),
+            num_epochs=2,
             grad_clip=0.5,
         )
         .resources(num_gpus=0)

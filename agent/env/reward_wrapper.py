@@ -74,9 +74,11 @@ class RewardWrapper(gym.Wrapper):
         self._start_col = 0
 
         # Stagnation-based truncation — end episode early if agent hasn't
-        # discovered any new ROOMS for this many steps (tiles don't count)
+        # discovered any new TILES for this many steps.  Tile-based (not
+        # room-based) so the agent can transit through known rooms.
         self._stagnation_limit = stagnation_limit
         self._steps_since_discovery = 0
+        self._prev_total_tiles = 0
 
         # Menu management — allow brief menu use for item switching,
         # but penalize camping and suppress exploration rewards while open
@@ -91,7 +93,7 @@ class RewardWrapper(gym.Wrapper):
 
         # Backtrack penalty — discourage re-entering recently visited rooms
         self._recent_rooms: deque[int] = deque(maxlen=5)
-        self._backtrack_penalty = cfg.get("backtrack_penalty", -30.0)
+        self._backtrack_penalty = cfg.get("backtrack_penalty", 0.0)
         self._prev_room_id = -1
 
         # Sub-reward modules
@@ -232,6 +234,7 @@ class RewardWrapper(gym.Wrapper):
         # Reset sub-modules
         self._coverage.reset()
         self._steps_since_discovery = 0
+        self._prev_total_tiles = 0
         self._menu_steps = 0
         self._recent_rooms.clear()
         self._prev_room_id = info.get("room_id", -1)
@@ -268,13 +271,18 @@ class RewardWrapper(gym.Wrapper):
 
         reward = self._compute_reward(obs, info, terminated)
 
-        # Room-based stagnation — only reset counter when a NEW ROOM is found
-        # (new tiles within visited rooms don't represent real progress)
+        # Tile-based stagnation — reset counter when ANY new tile is found.
+        # Room-based stagnation was too aggressive: the agent got truncated
+        # while transiting through known rooms to reach new areas.  Tile-based
+        # allows transit (new tiles are found even in visited rooms) while
+        # still ending episodes where the agent circles the same tiles.
         new_rooms = self._coverage.unique_rooms
-        if new_rooms > prev_rooms:
+        new_tiles = self._coverage.total_tiles
+        if new_tiles > self._prev_total_tiles:
             self._steps_since_discovery = 0
         else:
             self._steps_since_discovery += 1
+        self._prev_total_tiles = new_tiles
 
         if self._stagnation_limit > 0 and self._steps_since_discovery >= self._stagnation_limit:
             truncated = True
