@@ -25,6 +25,10 @@ from agent.env.ram_addresses import (
     DUNGEON_INDEX,
     DUNGEON_KEYS,
     ESSENCES_COLLECTED,
+    GNARLED_KEY_GIVEN_FLAG,
+    GNARLED_KEY_GIVEN_MASK,
+    GNARLED_KEY_OBTAINED,
+    GNARLED_KEY_OBTAINED_MASK,
     RUPEES,
     SWORD_LEVEL,
 )
@@ -62,16 +66,42 @@ class RewardWrapper(gym.Wrapper):
         self._maku_tree_bonus = cfg.get("maku_tree", 500.0)
 
         # Progression reward scales
-        self._dungeon_entry_bonus = 100.0
-        self._maku_tree_visit_bonus = 100.0
+        self._dungeon_entry_bonus = 500.0
+        self._maku_tree_visit_bonus = 500.0
+        self._indoor_entry_bonus = 200.0
         self._dungeon_floor_bonus = 50.0
 
+        # Dialog interaction reward — teaches the agent that NPC dialog is
+        # valuable (required for quest progression: Maku Tree gives Gnarled Key)
+        self._dialog_bonus = 20.0
+        self._dialog_rooms: set[int] = set()
+        self._prev_dialog_active = False
+
+        # Maku Tree quest milestone rewards — massive one-time bonuses for
+        # critical quest progression (oracles-disasm confirmed addresses)
+        self._maku_dialog_bonus = 1000.0    # Maku Tree gave Gnarled Key quest
+        self._gnarled_key_bonus = 1000.0    # Picked up the Gnarled Key item
+        self._prev_maku_dialog = False
+        self._prev_gnarled_key = False
+
         # Distance-from-start exploration bonus — rewards agent for reaching
-        # rooms further from the starting position (pokemonred_puffer style)
+        # rooms further from the starting position (pokemonred_puffer style).
+        # Only active in overworld (group 0) to avoid reward spikes from
+        # non-overworld room IDs that are in completely different ranges.
         self._distance_bonus = 200.0
         self._max_distance = 0
         self._start_row = 0
         self._start_col = 0
+
+        # Directional exploration bonus — biases exploration toward the Maku
+        # Tree which is east then north of the starting position.
+        # Decays per step (0.999^step) so it's strong early (guiding toward
+        # Maku Tree) but fades by mid-episode, allowing westward movement
+        # to reach Dungeon 1 after completing the Maku Tree sequence.
+        self._directional_bonus = 300.0
+        self._directional_decay = 0.999  # ~37% at 1K steps, ~5% at 3K
+        self._min_row_reached = 0
+        self._max_col_reached = 0
 
         # Stagnation-based truncation — end episode early if agent hasn't
         # discovered any new TILES for this many steps.  Tile-based (not
@@ -230,6 +260,8 @@ class RewardWrapper(gym.Wrapper):
         self._start_row = start_room // 16
         self._start_col = start_room % 16
         self._max_distance = 0
+        self._min_row_reached = self._start_row
+        self._max_col_reached = self._start_col
 
         # Reset sub-modules
         self._coverage.reset()
@@ -238,6 +270,10 @@ class RewardWrapper(gym.Wrapper):
         self._menu_steps = 0
         self._recent_rooms.clear()
         self._prev_room_id = info.get("room_id", -1)
+        self._dialog_rooms.clear()
+        self._prev_dialog_active = False
+        self._prev_maku_dialog = False
+        self._prev_gnarled_key = False
 
         # Reset milestones for new episode
         self._milestone_got_sword = False
@@ -331,6 +367,8 @@ class RewardWrapper(gym.Wrapper):
         info["milestone_essences"] = float(self._milestone_essences)
         info["milestone_dungeon_keys"] = float(self._milestone_dungeon_keys)
         info["milestone_max_rooms"] = float(self._milestone_max_rooms)
+        info["milestone_maku_dialog"] = float(self._prev_maku_dialog)
+        info["milestone_gnarled_key"] = float(self._prev_gnarled_key)
 
         return obs, reward, terminated, truncated, info
 
@@ -392,12 +430,44 @@ class RewardWrapper(gym.Wrapper):
         if active_group == 2 and self._prev_group != 2:
             reward += self._maku_tree_visit_bonus
 
+        # Indoor area bonus: ACTIVE_GROUP changed to 3
+        if active_group == 3 and self._prev_group != 3:
+            reward += self._indoor_entry_bonus
+
         # Dungeon floor change bonus (deeper exploration)
         if dungeon_floor != self._prev_dungeon_floor and active_group in (4, 5):
             reward += self._dungeon_floor_bonus
 
         self._prev_group = active_group
         self._prev_dungeon_floor = dungeon_floor
+
+        # Dialog interaction bonus — first dialog trigger per room.
+        # Teaches the agent that talking to NPCs leads to quest progression
+        # (e.g., Maku Tree gives Gnarled Key needed for Dungeon 1).
+        dialog_active = info.get("dialog_active", False)
+        room_id = info.get("room_id", 0)
+        if dialog_active and not self._prev_dialog_active:
+            if room_id not in self._dialog_rooms:
+                reward += self._dialog_bonus
+                self._dialog_rooms.add(room_id)
+        self._prev_dialog_active = dialog_active
+
+        # Maku Tree quest milestones — massive one-time bonuses.
+        # These are the critical quest progression gates that unlock Dungeon 1.
+        if hasattr(self.env, "_read"):
+            # Check GLOBALFLAG_GNARLED_KEY_GIVEN (Maku Tree gave the quest)
+            maku_dialog = bool(self.env._read(GNARLED_KEY_GIVEN_FLAG) & GNARLED_KEY_GIVEN_MASK)
+            if maku_dialog and not self._prev_maku_dialog:
+                reward += self._maku_dialog_bonus
+                logger.info("MILESTONE: Maku Tree gave Gnarled Key quest! (+%.0f)", self._maku_dialog_bonus)
+            self._prev_maku_dialog = maku_dialog
+
+            # Check TREASURE_GNARLED_KEY obtained (picked up the key item)
+            gnarled_key = bool(self.env._read(GNARLED_KEY_OBTAINED) & GNARLED_KEY_OBTAINED_MASK)
+            if gnarled_key and not self._prev_gnarled_key:
+                reward += self._gnarled_key_bonus
+                logger.info("MILESTONE: Gnarled Key obtained! (+%.0f)", self._gnarled_key_bonus)
+            self._prev_gnarled_key = gnarled_key
 
         # --- Menu management ---
         # Allow brief menu access for item switching, but suppress exploration
@@ -432,15 +502,33 @@ class RewardWrapper(gym.Wrapper):
                 reward += exit_delta * self._exit_seeking_scale
             self._prev_exit_dist = cur_exit_dist
 
-            # Distance-from-start bonus (overworld only)
+            # Distance-from-start bonus (overworld only).
+            # Non-overworld rooms use different room ID ranges, causing
+            # artificial huge Manhattan distances that destabilize training.
+            room_id = info.get("room_id", 0)
+            cur_row = room_id // 16
+            cur_col = room_id % 16
             if active_group == 0:
-                room_id = info.get("room_id", 0)
-                cur_row = room_id // 16
-                cur_col = room_id % 16
                 distance = abs(cur_row - self._start_row) + abs(cur_col - self._start_col)
                 if distance > self._max_distance:
                     self._max_distance = distance
                     reward += self._distance_bonus * distance
+
+                # Directional progress bonus — the Maku Tree is east then
+                # north of start. Reward both eastward (higher col) and
+                # northward (lower row) progress. Decays over the episode
+                # so the agent can head west to Dungeon 1 after the Maku Tree.
+                dir_bonus = self._directional_bonus * (
+                    self._directional_decay ** self.env.step_count
+                )
+                if cur_col > self._max_col_reached:
+                    cols_east = cur_col - self._max_col_reached
+                    reward += dir_bonus * cols_east
+                    self._max_col_reached = cur_col
+                if cur_row < self._min_row_reached:
+                    rows_north = self._min_row_reached - cur_row
+                    reward += dir_bonus * rows_north
+                    self._min_row_reached = cur_row
 
             # Coverage reward
             coverage = self._coverage.step(

@@ -45,6 +45,8 @@ class MilestoneCallbacks:
         episode.custom_metrics["essences"] = info.get("milestone_essences", 0.0)
         episode.custom_metrics["dungeon_keys"] = info.get("milestone_dungeon_keys", 0.0)
         episode.custom_metrics["max_rooms"] = info.get("milestone_max_rooms", 0.0)
+        episode.custom_metrics["maku_dialog"] = info.get("milestone_maku_dialog", 0.0)
+        episode.custom_metrics["gnarled_key"] = info.get("milestone_gnarled_key", 0.0)
 
 
 def _make_callbacks_class():
@@ -81,6 +83,8 @@ def _make_callbacks_class():
             episode.custom_metrics["essences"] = info.get("milestone_essences", 0.0)
             episode.custom_metrics["dungeon_keys"] = info.get("milestone_dungeon_keys", 0.0)
             episode.custom_metrics["max_rooms"] = info.get("milestone_max_rooms", 0.0)
+            episode.custom_metrics["maku_dialog"] = info.get("milestone_maku_dialog", 0.0)
+            episode.custom_metrics["gnarled_key"] = info.get("milestone_gnarled_key", 0.0)
 
     return ZeldaCallbacks
 

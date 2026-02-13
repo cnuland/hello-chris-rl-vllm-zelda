@@ -9,7 +9,7 @@ Vector features (128-D normalized [0,1]):
   24-25: Season (current, spirits)
   26-29: Dungeon progress
   30-33: Flags (dialog, puzzle, transition, overworld_pos)
-  34-36: Entity counts
+  34-36: Room state (enemies, toggle blocks, switches)
   37-44: Boss keys bitfield (8)
   45-64: OAM sprite proximity (20)
   65-68: Edge exit indicators (up, down, left, right)
@@ -51,11 +51,11 @@ from agent.env.ram_addresses import (
     ESSENCES_COLLECTED,
     GALE_SEEDS,
     GASHA_SEEDS,
-    ITEMS_COUNT,
+    SWITCH_STATE,
     MAGNETIC_GLOVES,
     MAX_BOMBS,
     MYSTERY_SEEDS,
-    NPCS_COUNT,
+    TOGGLE_BLOCKS_STATE,
     OAM_BASE,
     ORE_CHUNKS,
     OVERWORLD_POSITION,
@@ -155,10 +155,10 @@ def encode_vector(env: ZeldaEnv) -> np.ndarray:
     v[idx + 3] = r(OVERWORLD_POSITION) / 255.0
     idx += 4
 
-    # --- Entity counts (3) ---
+    # --- Room state (3) ---
     v[idx] = min(r(ENEMIES_COUNT) / 10.0, 1.0)
-    v[idx + 1] = min(r(NPCS_COUNT) / 10.0, 1.0)
-    v[idx + 2] = min(r(ITEMS_COUNT) / 10.0, 1.0)
+    v[idx + 1] = min(r(TOGGLE_BLOCKS_STATE) / 3.0, 1.0)  # orb-activated block state
+    v[idx + 2] = min(r(SWITCH_STATE) / 255.0, 1.0)        # switches pressed bitset
     idx += 3
 
     # --- Boss keys bitfield (8) ---

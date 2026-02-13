@@ -111,7 +111,7 @@ def make_wrapped_env(config: dict):
         enable_export=config.get("enable_export", True),
         s3_config=config.get("s3_config"),
         epoch=config.get("epoch", 0),
-        stagnation_limit=config.get("stagnation_limit", 3000),
+        stagnation_limit=config.get("stagnation_limit", 5000),
     )
     return wrapped
 
@@ -394,6 +394,8 @@ def run_training_epoch(
         "got_sword_pct": _get_metric(custom, "got_sword") * 100,
         "entered_dungeon_pct": _get_metric(custom, "entered_dungeon") * 100,
         "visited_maku_tree_pct": _get_metric(custom, "visited_maku_tree") * 100,
+        "maku_dialog_pct": _get_metric(custom, "maku_dialog") * 100,
+        "gnarled_key_pct": _get_metric(custom, "gnarled_key") * 100,
         "avg_essences": _get_metric(custom, "essences"),
         "avg_dungeon_keys": _get_metric(custom, "dungeon_keys"),
         "avg_rooms": _get_metric(custom, "max_rooms"),
@@ -408,6 +410,8 @@ def run_training_epoch(
     logger.info("  Got Sword: %.1f%% of episodes", milestones["got_sword_pct"])
     logger.info("  Entered Dungeon: %.1f%% of episodes", milestones["entered_dungeon_pct"])
     logger.info("  Visited Maku Tree: %.1f%% of episodes", milestones["visited_maku_tree_pct"])
+    logger.info("  Maku Tree Dialog: %.1f%% of episodes", milestones["maku_dialog_pct"])
+    logger.info("  Got Gnarled Key: %.1f%% of episodes", milestones["gnarled_key_pct"])
     logger.info("  Avg Essences: %.2f", milestones["avg_essences"])
     logger.info("  Avg Dungeon Keys: %.2f", milestones["avg_dungeon_keys"])
     logger.info("  Avg Rooms Explored: %.1f", milestones["avg_rooms"])

@@ -88,6 +88,16 @@ RUPEES_COLLECTED = 0xC627    # wTotalRupeesCollected, 2 bytes
 SIGNS_DESTROYED = 0xC626     # wTotalSignsDestroyed
 GLOBAL_FLAGS = 0xC6CA        # wGlobalFlags (16 bytes, 128 flags bitset)
 
+# --- Maku Tree quest progression (oracles-disasm confirmed) ---
+# GLOBALFLAG_GNARLED_KEY_GIVEN = flag 0x18 → byte 3 (0xC6CD), bit 0
+GNARLED_KEY_GIVEN_FLAG = 0xC6CD   # wGlobalFlags + 3, bit 0 = Maku Tree gave Gnarled Key
+GNARLED_KEY_GIVEN_MASK = 0x01
+# TREASURE_GNARLED_KEY = 0x42 → byte 8 (0xC69A), bit 2
+GNARLED_KEY_OBTAINED = 0xC69A     # wObtainedTreasureFlags + 8, bit 2 = picked up key
+GNARLED_KEY_OBTAINED_MASK = 0x04
+# Maku Tree stage: 0=first meeting, increases with essences collected
+MAKU_TREE_STAGE = 0xCDDA          # ws_cc39 (Seasons only)
+
 # =============================================================================
 # World
 # =============================================================================
@@ -134,8 +144,6 @@ DUNGEON_COMPASS = 0xC67C     # wDungeonCompasses (2-byte bitset)
 ENEMIES_COUNT = 0xCC30       # wNumEnemies (triggers events when reaches 0)
 TOGGLE_BLOCKS_STATE = 0xCC31 # wToggleBlocksState (orb-activated block state)
 SWITCH_STATE = 0xCC32        # wSwitchState (bitset of switches pressed in room)
-NPCS_COUNT = 0xCC31          # Legacy alias — actually wToggleBlocksState
-ITEMS_COUNT = 0xCC32         # Legacy alias — actually wSwitchState
 
 # =============================================================================
 # Tile interaction
