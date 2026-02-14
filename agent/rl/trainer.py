@@ -174,7 +174,7 @@ def create_ppo_config(
             gamma=0.999,
             lambda_=0.95,
             clip_param=0.2,
-            vf_clip_param=50.0,
+            vf_clip_param=10.0,
             entropy_coeff=ent,
             train_batch_size_per_learner=bs,
             minibatch_size=min(bs, 2048),

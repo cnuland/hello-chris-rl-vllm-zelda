@@ -749,7 +749,7 @@ def main():
     logger.info("Entropy schedule: %.4f → %.4f", entropy_start, entropy_end)
     logger.info("LR schedule: %.2e → %.2e", lr_start, lr_end)
     logger.info("God mode curriculum: first %d epochs", god_mode_epochs)
-    logger.info("Gamma: 0.999, Stagnation limit: 2000 steps (coord-based)")
+    logger.info("Gamma: 0.999, Stagnation limit: 3000 steps (coord-based)")
     logger.info("Evaluation: %s", "enabled" if run_eval else "disabled")
 
     # Clean old MinIO data for fresh start
