@@ -533,7 +533,12 @@ class RewardWrapper(gym.Wrapper):
                 north_dist = max(self._start_row - cur_row, 0)
                 directed_distance = east_dist + north_dist
                 if directed_distance > self._max_distance:
-                    reward += self._distance_bonus * (directed_distance - self._max_distance)
+                    # Scaling distance bonus: each unit further from start
+                    # is worth more. distance_bonus * d for each new unit d.
+                    # E.g. 1st unit=5, 2nd=10, 3rd=15... creating an
+                    # accelerating incentive to push further from start.
+                    for d in range(self._max_distance + 1, directed_distance + 1):
+                        reward += self._distance_bonus * d
                     self._max_distance = directed_distance
 
                 # Directional progress bonus — the Maku Tree is east then
