@@ -32,10 +32,10 @@ class CoverageReward:
     O(1) per step — no need to iterate all coords for decay.
     """
 
-    bonus_per_tile: float = 0.02
-    bonus_per_room: float = 3.0
+    bonus_per_tile: float = 0.005
+    bonus_per_room: float = 10.0
     coord_decay_factor: float = 0.9998
-    coord_decay_floor: float = 0.15
+    coord_decay_floor: float = 0.60
     # coord → step number of last visit
     _seen_coords: dict[tuple[int, int, int], int] = field(default_factory=dict)
     _visited_rooms: set[int] = field(default_factory=set)

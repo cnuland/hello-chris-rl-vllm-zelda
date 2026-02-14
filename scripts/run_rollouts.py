@@ -249,7 +249,7 @@ def run_training_epoch(
     env_config = {
         "rom_path": os.getenv("ROM_PATH", "roms/zelda.gbc"),
         "headless": True,
-        "frame_skip": 8,
+        "frame_skip": 4,
         "max_steps": ep_length,
         "render_mode": "rgb_array",
         "save_state_path": os.getenv("SAVE_STATE_PATH", ""),
@@ -258,7 +258,7 @@ def run_training_epoch(
         "enable_shaping": bool(rm_path),
         "reward_model_path": rm_path,
         "enable_export": True,
-        "stagnation_limit": 2000,  # Truncate after 2K steps without new coord
+        "stagnation_limit": 3000,  # Truncate after 3K steps without new coord
         "god_mode": god_mode,
     }
 

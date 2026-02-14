@@ -74,7 +74,7 @@ class RewardWrapper(gym.Wrapper):
 
         # Dialog interaction reward — teaches the agent that NPC dialog is
         # valuable (required for quest progression: Maku Tree gives Gnarled Key)
-        self._dialog_bonus = cfg.get("dialog_bonus", 1.0)
+        self._dialog_bonus = cfg.get("dialog_bonus", 3.0)
         self._dialog_rooms: set[int] = set()
         self._prev_dialog_active = False
 
@@ -89,7 +89,7 @@ class RewardWrapper(gym.Wrapper):
         # rooms further from the starting position (pokemonred_puffer style).
         # Only active in overworld (group 0) to avoid reward spikes from
         # non-overworld room IDs that are in completely different ranges.
-        self._distance_bonus = cfg.get("distance_bonus", 2.0)
+        self._distance_bonus = cfg.get("distance_bonus", 5.0)
         self._max_distance = 0
         self._start_row = 0
         self._start_col = 0
@@ -99,7 +99,7 @@ class RewardWrapper(gym.Wrapper):
         # Decays per step (0.999^step) so it's strong early (guiding toward
         # Maku Tree) but fades by mid-episode, allowing westward movement
         # to reach Dungeon 1 after completing the Maku Tree sequence.
-        self._directional_bonus = cfg.get("directional_bonus", 3.0)
+        self._directional_bonus = cfg.get("directional_bonus", 8.0)
         self._directional_decay = cfg.get("directional_decay", 0.999)
         self._min_row_reached = 0
         self._max_col_reached = 0
@@ -143,10 +143,10 @@ class RewardWrapper(gym.Wrapper):
 
         # Sub-reward modules
         self._coverage = CoverageReward(
-            bonus_per_tile=cfg.get("grid_exploration", 0.02),
-            bonus_per_room=cfg.get("new_room", 3.0),
+            bonus_per_tile=cfg.get("grid_exploration", 0.005),
+            bonus_per_room=cfg.get("new_room", 10.0),
             coord_decay_factor=cfg.get("coord_decay_factor", 0.9998),
-            coord_decay_floor=cfg.get("coord_decay_floor", 0.15),
+            coord_decay_floor=cfg.get("coord_decay_floor", 0.60),
         )
 
         self._rnd = RNDCuriosity() if enable_rnd else None
