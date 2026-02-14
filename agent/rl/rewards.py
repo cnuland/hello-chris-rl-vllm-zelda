@@ -1,12 +1,13 @@
 """Reward shaping: coverage, RND curiosity, potential-based RLAIF.
 
-Coverage reward: decaying exploration bonus per first-visit tile per room.
+Coverage reward: count-based exploration bonus per tile per room.
 RND curiosity: clamped to <= 30% of extrinsic reward, with obs normalization.
 RLAIF shaping: r' = r + lambda * R_phi (potential-based).
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -14,37 +15,34 @@ import numpy as np
 
 @dataclass
 class CoverageReward:
-    """Track coordinate coverage with decay-based re-exploration.
+    """Track coordinate coverage with count-based diminishing returns.
 
-    Uses fine-grained (room_id, tile_x, tile_y) coordinate tracking
-    inspired by PokemonRedExperiments' seen_coords approach.  Each
-    16×16-pixel tile position is a unique coordinate, giving ~80 coords
-    per room (10 cols × 8 rows).
+    Uses fine-grained (room_id, tile_x, tile_y) coordinate tracking.
+    Each 16×16-pixel tile position is a unique coordinate, giving ~80
+    coords per room (10 cols × 8 rows).
 
-    Coordinate decay (pokemonred_puffer style): each coord tracks its
-    last visit step. "Freshness" is computed analytically as
-    decay_factor^(steps_since_visit).  Revisiting a decayed coord
-    yields partial reward: bonus * (1 - freshness).  This means:
-      - First visit: full bonus (freshness = 0)
-      - Immediate revisit: zero bonus (freshness = 1.0)
-      - After ~10K steps: 85% bonus (freshness decayed to floor)
+    Count-based exploration: each coord tracks its visit count N.
+    Reward per visit = bonus / sqrt(N).  This means:
+      - 1st visit: full bonus (1/sqrt(1) = 1.0)
+      - 2nd visit: 71% bonus (1/sqrt(2) ≈ 0.707)
+      - 4th visit: 50% bonus (1/sqrt(4) = 0.5)
+      - 9th visit: 33% bonus (1/sqrt(9) ≈ 0.333)
+      - 100th visit: 10% bonus (1/sqrt(100) = 0.1)
 
-    O(1) per step — no need to iterate all coords for decay.
+    Unlike coord decay, this never recovers — revisiting the same tile
+    always yields less reward, preventing circular exploitation.
+    O(1) per step.
     """
 
     bonus_per_tile: float = 0.005
     bonus_per_room: float = 10.0
-    coord_decay_factor: float = 0.9998
-    coord_decay_floor: float = 0.60
-    # coord → step number of last visit
-    _seen_coords: dict[tuple[int, int, int], int] = field(default_factory=dict)
+    # coord → visit count
+    _visit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
     _visited_rooms: set[int] = field(default_factory=set)
-    _step_count: int = 0
 
     def step(self, room_id: int, pixel_x: int, pixel_y: int) -> float:
         """Return coverage reward for this step."""
         reward = 0.0
-        self._step_count += 1
 
         # New room bonus — flat per room
         if room_id not in self._visited_rooms:
@@ -56,25 +54,16 @@ class CoverageReward:
         tile_y = pixel_y // 16
         coord = (room_id, tile_x, tile_y)
 
-        if coord not in self._seen_coords:
-            # First visit — full bonus
-            reward += self.bonus_per_tile
-        else:
-            # Revisit — partial bonus based on decay since last visit
-            steps_since = self._step_count - self._seen_coords[coord]
-            freshness = self.coord_decay_factor ** steps_since
-            freshness = max(self.coord_decay_floor, freshness)
-            reward += self.bonus_per_tile * (1.0 - freshness)
-
-        # Record this visit
-        self._seen_coords[coord] = self._step_count
+        # Count-based: reward = bonus / sqrt(visit_count)
+        count = self._visit_counts.get(coord, 0) + 1
+        self._visit_counts[coord] = count
+        reward += self.bonus_per_tile / math.sqrt(count)
 
         return reward
 
     def reset(self) -> None:
-        self._seen_coords.clear()
+        self._visit_counts.clear()
         self._visited_rooms.clear()
-        self._step_count = 0
 
     @property
     def unique_rooms(self) -> int:
@@ -82,7 +71,7 @@ class CoverageReward:
 
     @property
     def total_tiles(self) -> int:
-        return len(self._seen_coords)
+        return len(self._visit_counts)
 
 
 class RNDCuriosity:

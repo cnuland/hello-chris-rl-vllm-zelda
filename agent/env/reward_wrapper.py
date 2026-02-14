@@ -145,8 +145,6 @@ class RewardWrapper(gym.Wrapper):
         self._coverage = CoverageReward(
             bonus_per_tile=cfg.get("grid_exploration", 0.005),
             bonus_per_room=cfg.get("new_room", 10.0),
-            coord_decay_factor=cfg.get("coord_decay_factor", 0.9998),
-            coord_decay_floor=cfg.get("coord_decay_floor", 0.60),
         )
 
         self._rnd = RNDCuriosity() if enable_rnd else None

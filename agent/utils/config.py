@@ -43,8 +43,6 @@ class RewardConfig(BaseModel):
     distance_bonus: float = 5.0
     directional_bonus: float = 20.0
     directional_decay: float = 0.999
-    coord_decay_factor: float = 0.9998
-    coord_decay_floor: float = 0.60
     area_boost_overworld: float = 1.0
     area_boost_subrosia: float = 1.5
     area_boost_maku: float = 3.0
