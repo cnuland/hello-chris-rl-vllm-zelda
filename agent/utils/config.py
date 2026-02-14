@@ -41,7 +41,7 @@ class RewardConfig(BaseModel):
     maku_dialog: float = 30.0
     gnarled_key: float = 30.0
     distance_bonus: float = 5.0
-    directional_bonus: float = 8.0
+    directional_bonus: float = 20.0
     directional_decay: float = 0.999
     coord_decay_factor: float = 0.9998
     coord_decay_floor: float = 0.60

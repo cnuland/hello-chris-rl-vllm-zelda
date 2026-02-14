@@ -41,7 +41,7 @@ BASE_REWARDS: dict[str, float] = {
     "maku_dialog": 30.0,
     "gnarled_key": 30.0,
     "distance_bonus": 5.0,
-    "directional_bonus": 8.0,
+    "directional_bonus": 20.0,
     "directional_decay": 0.999,
     "coord_decay_factor": 0.9998,
     "coord_decay_floor": 0.60,
@@ -56,7 +56,7 @@ BASE_REWARDS: dict[str, float] = {
 # disproportionately large regardless of multiplier.
 ABS_CLAMPS: dict[str, tuple[float, float]] = {
     "new_room": (3.0, 20.0),
-    "directional_bonus": (3.0, 16.0),
+    "directional_bonus": (10.0, 40.0),
     "distance_bonus": (2.0, 10.0),
     "dialog_bonus": (1.0, 6.0),
     "dungeon_entry": (5.0, 30.0),

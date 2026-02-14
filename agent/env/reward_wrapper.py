@@ -99,7 +99,7 @@ class RewardWrapper(gym.Wrapper):
         # Decays per step (0.999^step) so it's strong early (guiding toward
         # Maku Tree) but fades by mid-episode, allowing westward movement
         # to reach Dungeon 1 after completing the Maku Tree sequence.
-        self._directional_bonus = cfg.get("directional_bonus", 8.0)
+        self._directional_bonus = cfg.get("directional_bonus", 20.0)
         self._directional_decay = cfg.get("directional_decay", 0.999)
         self._min_row_reached = 0
         self._max_col_reached = 0
@@ -523,16 +523,20 @@ class RewardWrapper(gym.Wrapper):
             self._prev_exit_dist = cur_exit_dist
 
             # Distance-from-start bonus (overworld only).
-            # Non-overworld rooms use different room ID ranges, causing
-            # artificial huge Manhattan distances that destabilize training.
+            # Only reward EASTWARD and NORTHWARD distance (toward the Maku
+            # Tree), not absolute Manhattan distance — absolute distance
+            # rewarded going south/west equally, causing the agent to
+            # explore the wrong side of the map.
             room_id = info.get("room_id", 0)
             cur_row = room_id // 16
             cur_col = room_id % 16
             if active_group == 0:
-                distance = abs(cur_row - self._start_row) + abs(cur_col - self._start_col)
-                if distance > self._max_distance:
-                    self._max_distance = distance
-                    reward += self._distance_bonus * distance
+                east_dist = max(cur_col - self._start_col, 0)
+                north_dist = max(self._start_row - cur_row, 0)
+                directed_distance = east_dist + north_dist
+                if directed_distance > self._max_distance:
+                    reward += self._distance_bonus * (directed_distance - self._max_distance)
+                    self._max_distance = directed_distance
 
                 # Directional progress bonus — the Maku Tree is east then
                 # north of start. Reward both eastward (higher col) and
