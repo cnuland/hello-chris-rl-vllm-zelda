@@ -143,7 +143,7 @@ class RewardWrapper(gym.Wrapper):
 
         # Sub-reward modules
         self._coverage = CoverageReward(
-            bonus_per_tile=cfg.get("grid_exploration", 0.005),
+            bonus_per_tile=cfg.get("grid_exploration", 0.1),
             bonus_per_room=cfg.get("new_room", 10.0),
         )
 

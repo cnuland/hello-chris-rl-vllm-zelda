@@ -34,7 +34,7 @@ class CoverageReward:
     O(1) per step.
     """
 
-    bonus_per_tile: float = 0.005
+    bonus_per_tile: float = 0.1
     bonus_per_room: float = 10.0
     # coord → visit count
     _visit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)

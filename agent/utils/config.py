@@ -28,7 +28,7 @@ class RewardConfig(BaseModel):
     time_penalty: float = 0.0
     new_room: float = 10.0
     movement: float = 0.1
-    grid_exploration: float = 0.005
+    grid_exploration: float = 0.1
     maku_tree: float = 15.0
     sword: float = 15.0
     dungeon: float = 15.0
