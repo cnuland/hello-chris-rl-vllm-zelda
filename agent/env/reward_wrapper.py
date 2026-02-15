@@ -139,7 +139,7 @@ class RewardWrapper(gym.Wrapper):
 
         # Backtrack penalty — discourage re-entering recently visited rooms
         self._recent_rooms: deque[int] = deque(maxlen=5)
-        self._backtrack_penalty = cfg.get("backtrack_penalty", -1.0)
+        self._backtrack_penalty = cfg.get("backtrack_penalty", -0.3)
         self._prev_room_id = -1
 
         # Sub-reward modules
