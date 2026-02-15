@@ -258,7 +258,7 @@ def run_training_epoch(
         "enable_shaping": bool(rm_path),
         "reward_model_path": rm_path,
         "enable_export": True,
-        "stagnation_limit": 3000,  # Truncate after 3K steps without new coord
+        "stagnation_limit": 1500,  # Truncate after 1.5K steps without new tile
         "god_mode": god_mode,
     }
 

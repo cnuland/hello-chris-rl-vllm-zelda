@@ -96,9 +96,10 @@ class RewardWrapper(gym.Wrapper):
 
         # Directional exploration bonus — biases exploration toward the Maku
         # Tree which is east then north of the starting position.
-        # Decays per step (0.999^step) so it's strong early (guiding toward
-        # Maku Tree) but fades by mid-episode, allowing westward movement
-        # to reach Dungeon 1 after completing the Maku Tree sequence.
+        # Decays based on DISTANCE ACHIEVED (not steps elapsed), so it
+        # stays strong until the agent actually goes east/north. Once the
+        # agent reaches the Maku Tree area (~9 units), the bonus has faded
+        # enough to allow westward movement to Dungeon 1.
         self._directional_bonus = cfg.get("directional_bonus", 20.0)
         self._directional_decay = cfg.get("directional_decay", 0.999)
         self._min_row_reached = 0
@@ -138,7 +139,7 @@ class RewardWrapper(gym.Wrapper):
 
         # Backtrack penalty — discourage re-entering recently visited rooms
         self._recent_rooms: deque[int] = deque(maxlen=5)
-        self._backtrack_penalty = cfg.get("backtrack_penalty", 0.0)
+        self._backtrack_penalty = cfg.get("backtrack_penalty", -1.0)
         self._prev_room_id = -1
 
         # Sub-reward modules
@@ -543,10 +544,11 @@ class RewardWrapper(gym.Wrapper):
 
                 # Directional progress bonus — the Maku Tree is east then
                 # north of start. Reward both eastward (higher col) and
-                # northward (lower row) progress. Decays over the episode
-                # so the agent can head west to Dungeon 1 after the Maku Tree.
+                # northward (lower row) progress. Decays based on distance
+                # achieved so it stays strong until the agent actually goes
+                # east/north, then fades to allow westward to Dungeon 1.
                 dir_bonus = self._directional_bonus * (
-                    self._directional_decay ** self.env.step_count
+                    self._directional_decay ** (self._max_distance * 500)
                 )
                 if cur_col > self._max_col_reached:
                     cols_east = cur_col - self._max_col_reached
