@@ -739,6 +739,28 @@ def main():
 
     ray.init()
 
+    # Download save state from MinIO if not already present locally
+    save_state_path = os.getenv("SAVE_STATE_PATH", "")
+    if save_state_path and not os.path.exists(save_state_path):
+        save_state_key = os.getenv(
+            "SAVE_STATE_S3_KEY", "save-states/zelda-maku-gate.gbc.state"
+        )
+        logger.info(
+            "Downloading save state from MinIO: %s -> %s",
+            save_state_key, save_state_path,
+        )
+        try:
+            from agent.utils.config import S3Config
+            from agent.utils.s3 import S3Client
+            s3 = S3Client(S3Config())
+            data = s3.download_bytes("zelda-models", save_state_key)
+            os.makedirs(os.path.dirname(save_state_path) or ".", exist_ok=True)
+            with open(save_state_path, "wb") as f:
+                f.write(data)
+            logger.info("Save state downloaded (%d bytes)", len(data))
+        except Exception as e:
+            logger.warning("Failed to download save state: %s", e)
+
     logger.info("=== ZELDA RL TRAINING PIPELINE ===")
     logger.info(
         "Epochs: %d-%d, Steps/epoch: %s",
