@@ -9,6 +9,7 @@ resources:
 - monitoring
 - rl-training
 - evaluator
+- builds
 
 labels:
 - pairs:

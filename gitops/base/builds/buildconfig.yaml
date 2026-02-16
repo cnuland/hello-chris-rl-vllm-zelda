@@ -1,0 +1,31 @@
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: zelda-pufferlib-trainer
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: builds
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/cnuland/hello-chris-rl-vllm-zelda.git
+      ref: main
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Containerfile.pufferlib
+  output:
+    to:
+      kind: DockerImage
+      name: quay.io/cnuland/zelda-pufferlib-trainer:latest
+    pushSecret:
+      name: quay-push-credentials
+  resources:
+    requests:
+      cpu: "4"
+      memory: 8Gi
+    limits:
+      cpu: "8"
+      memory: 16Gi
+  runPolicy: Serial
