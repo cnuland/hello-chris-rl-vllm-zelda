@@ -43,5 +43,5 @@ ENV SAVE_STATE_PATH=""
 ENV PYTHONPATH=/home/trainer
 ENV PATH="/home/trainer/.local/bin:${PATH}"
 
-ENTRYPOINT ["/home/trainer/scripts/entrypoint.sh"]
+ENTRYPOINT ["bash", "/home/trainer/scripts/entrypoint.sh"]
 CMD ["python", "scripts/train_pufferlib.py"]
