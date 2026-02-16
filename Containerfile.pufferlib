@@ -36,7 +36,7 @@ COPY --chown=trainer:trainer scripts/ ./scripts/
 COPY --chown=trainer:trainer data/ ./data/
 
 # ROM files are downloaded from MinIO at startup (gitignored, not in repo)
-RUN mkdir -p /home/trainer/roms
+RUN mkdir -p /home/trainer/roms && chmod +x /home/trainer/scripts/entrypoint.sh
 
 ENV ROM_PATH=/home/trainer/roms/zelda.gbc
 ENV SAVE_STATE_PATH=""
