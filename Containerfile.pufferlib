@@ -1,0 +1,46 @@
+FROM pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
+
+USER root
+
+# System deps for PyBoy (SDL2 headless)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsdl2-dev \
+    libsdl2-2.0-0 \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -s /bin/bash trainer
+USER trainer
+WORKDIR /home/trainer
+
+# Install Python dependencies
+COPY --chown=trainer:trainer pyproject.toml ./
+RUN pip install --no-cache-dir --user \
+    "pufferlib>=2.0" \
+    "pyboy>=2.6.0" \
+    "gymnasium>=0.29.0" \
+    "numpy>=1.24.0" \
+    "torch>=2.1.0" \
+    "httpx>=0.25.0" \
+    "boto3>=1.28.0" \
+    "Pillow>=9.0.0" \
+    "PyYAML>=6.0" \
+    "pydantic>=2.0.0"
+
+# Copy application code
+COPY --chown=trainer:trainer agent/ ./agent/
+COPY --chown=trainer:trainer scripts/ ./scripts/
+COPY --chown=trainer:trainer data/ ./data/
+
+# Copy ROM and save state
+COPY --chown=trainer:trainer new/ignored/zelda.gbc ./roms/zelda.gbc
+COPY --chown=trainer:trainer new/ignored/zelda.gbc.state ./roms/zelda.gbc.state
+COPY --chown=trainer:trainer new/ignored/zelda.gbc.ram ./roms/zelda.gbc.ram
+
+ENV ROM_PATH=/home/trainer/roms/zelda.gbc
+ENV SAVE_STATE_PATH=""
+ENV PYTHONPATH=/home/trainer
+ENV PATH="/home/trainer/.local/bin:${PATH}"
+
+CMD ["python", "scripts/train_pufferlib.py"]

@@ -1,82 +1,49 @@
-# Dev: 1 worker, 3 envs, reduced resources
-apiVersion: ray.io/v1
-kind: RayCluster
+# Dev: 6 envs, 2 workers, reduced resources, no GPU
+apiVersion: batch/v1
+kind: Job
 metadata:
-  name: zelda-rl
+  name: zelda-pufferlib-training
 spec:
-  headGroupSpec:
-    template:
-      spec:
-        containers:
-        - name: ray-head
-          resources:
-            requests:
-              cpu: "2"
-              memory: 4Gi
-            limits:
-              cpu: "4"
-              memory: 8Gi
-          env:
-          - name: RAY_WORKERS
-            value: "3"
-          - name: ENVS_PER_WORKER
-            value: "3"
-          - name: EPISODE_LENGTH
-            value: "10000"
-          - name: BATCH_SIZE
-            value: "1024"
-          - name: S3_ENDPOINT_URL
-            value: http://minio-api.zelda-rl-dev.svc.cluster.local:9000
-          - name: S3_ACCESS_KEY
-            valueFrom:
-              secretKeyRef:
-                name: minio-credentials
-                key: access-key
-          - name: S3_SECRET_KEY
-            valueFrom:
-              secretKeyRef:
-                name: minio-credentials
-                key: secret-key
-          - name: LLM_GATEWAY_URL
-            value: http://llm-d-gateway.zelda-rl-dev.svc.cluster.local:8080
-  workerGroupSpecs:
-  - replicas: 1
-    minReplicas: 1
-    maxReplicas: 2
-    groupName: pyboy-workers
-    template:
-      spec:
-        containers:
-        - name: ray-worker
-          resources:
-            requests:
-              cpu: "2"
-              memory: 4Gi
-            limits:
-              cpu: "4"
-              memory: 8Gi
-          env:
-          - name: RAY_WORKERS
-            value: "3"
-          - name: ENVS_PER_WORKER
-            value: "3"
-          - name: EPISODE_LENGTH
-            value: "10000"
-          - name: BATCH_SIZE
-            value: "1024"
-          - name: S3_ENDPOINT_URL
-            value: http://minio-api.zelda-rl-dev.svc.cluster.local:9000
-          - name: S3_ACCESS_KEY
-            valueFrom:
-              secretKeyRef:
-                name: minio-credentials
-                key: access-key
-          - name: S3_SECRET_KEY
-            valueFrom:
-              secretKeyRef:
-                name: minio-credentials
-                key: secret-key
-          - name: LLM_GATEWAY_URL
-            value: http://llm-d-gateway.zelda-rl-dev.svc.cluster.local:8080
-        nodeSelector: {}
-        tolerations: []
+  template:
+    spec:
+      tolerations: []
+      containers:
+      - name: pufferlib-trainer
+        resources:
+          requests:
+            cpu: "4"
+            memory: 8Gi
+          limits:
+            cpu: "8"
+            memory: 16Gi
+        env:
+        - name: NUM_ENVS
+          value: "6"
+        - name: NUM_WORKERS
+          value: "2"
+        - name: EPISODE_LENGTH
+          value: "10000"
+        - name: EPOCH_STEPS
+          value: "100000"
+        - name: MAX_EPOCHS
+          value: "5"
+        - name: MINIBATCH_SIZE
+          value: "512"
+        - name: CLEAN_START
+          value: "true"
+        - name: RUN_EVAL
+          value: "false"
+        - name: S3_ENDPOINT_URL
+          value: http://minio-api.zelda-rl-dev.svc.cluster.local:9000
+        - name: S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: access-key
+        - name: S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: secret-key
+        - name: LLM_GATEWAY_URL
+          value: http://llm-d-gateway.zelda-rl-dev.svc.cluster.local:8080

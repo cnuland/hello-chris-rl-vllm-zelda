@@ -40,9 +40,6 @@ BASE_REWARDS: dict[str, float] = {
     "dialog_bonus": 3.0,
     "maku_dialog": 30.0,
     "gnarled_key": 30.0,
-    "distance_bonus": 5.0,
-    "directional_bonus": 20.0,
-    "directional_decay": 0.999,
     "area_boost_overworld": 1.0,
     "area_boost_subrosia": 1.5,
     "area_boost_maku": 3.0,
@@ -54,8 +51,6 @@ BASE_REWARDS: dict[str, float] = {
 # disproportionately large regardless of multiplier.
 ABS_CLAMPS: dict[str, tuple[float, float]] = {
     "new_room": (3.0, 20.0),
-    "directional_bonus": (10.0, 40.0),
-    "distance_bonus": (2.0, 10.0),
     "dialog_bonus": (1.0, 6.0),
     "dungeon_entry": (5.0, 30.0),
     "maku_tree_visit": (5.0, 30.0),
@@ -67,7 +62,6 @@ ABS_CLAMPS: dict[str, tuple[float, float]] = {
     "maku_tree": (5.0, 30.0),
     "grid_exploration": (0.02, 0.3),
     "exit_seeking": (0.1, 2.0),
-    "directional_decay": (0.995, 0.9999),
     "area_boost_overworld": (0.5, 2.0),
     "area_boost_subrosia": (0.5, 3.0),
     "area_boost_maku": (1.0, 5.0),
@@ -264,10 +258,10 @@ class RewardAdvisor:
             '  - 1.0 = keep current value, >1.0 = increase, <1.0 = decrease\n'
             '  - Only include parameters you want to change (omit ones that should stay at 1.0)\n'
             '- "rationale": brief explanation of why you chose these multipliers\n\n'
-            "Focus on the BIGGEST bottleneck. If the agent never reaches the Maku Tree, "
-            "boost directional_bonus and dialog_bonus. If it gets the sword but doesn't "
-            "explore, boost new_room and distance_bonus. If it explores but ignores NPCs, "
-            "boost dialog_bonus and maku_dialog."
+            "Focus on the BIGGEST bottleneck. If the agent isn't exploring enough rooms, "
+            "boost new_room and grid_exploration. If it explores but ignores NPCs, "
+            "boost dialog_bonus and maku_dialog. If it avoids key areas, boost the "
+            "relevant area_boost multiplier."
         )
 
         return "\n".join(parts)

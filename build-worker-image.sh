@@ -1,12 +1,12 @@
 #!/bin/bash
 set -e
 
-IMAGE_NAME="quay.io/cnuland/zelda-kuberay-worker"
+IMAGE_NAME="quay.io/cnuland/zelda-pufferlib-trainer"
 VERSION="${1:-latest}"
 FULL_IMAGE="${IMAGE_NAME}:${VERSION}"
 
 echo "Building ${FULL_IMAGE}..."
-podman build -t "${FULL_IMAGE}" -f Containerfile .
+podman build -t "${FULL_IMAGE}" -f Containerfile.pufferlib .
 
 echo ""
 echo "Build complete: ${FULL_IMAGE}"

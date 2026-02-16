@@ -1,19 +1,16 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: ray-cluster-manager
+  name: training-job-manager
   labels:
     app.kubernetes.io/part-of: zelda-rl
 rules:
-- apiGroups: [ray.io]
-  resources: [rayclusters, rayjobs]
-  verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups: [batch]
+  resources: [jobs]
+  verbs: [get, list, watch]
 - apiGroups: [""]
   resources: [pods, pods/log]
   verbs: [get, list, watch]
-- apiGroups: [""]
-  resources: [services]
-  verbs: [get, list, watch, create, delete]
 - apiGroups: [""]
   resources: [events]
   verbs: [get, list, watch]
@@ -23,20 +20,17 @@ rules:
 - apiGroups: [""]
   resources: [configmaps]
   verbs: [get, list, watch, create, update, patch, delete]
-- apiGroups: [route.openshift.io]
-  resources: [routes]
-  verbs: [get, list, watch, create, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: zelda-rl-training-ray-manager
+  name: zelda-rl-training-job-manager
   labels:
     app.kubernetes.io/part-of: zelda-rl
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: ray-cluster-manager
+  name: training-job-manager
 subjects:
 - kind: ServiceAccount
   name: zelda-rl-training

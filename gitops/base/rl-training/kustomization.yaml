@@ -5,10 +5,8 @@ namespace: zelda-rl
 resources:
 - serviceaccount.yaml
 - rbac.yaml
-- raycluster.yaml
-- rayjob.yaml
+- pufferlib-job.yaml
 - kueue-localqueue.yaml
-- service.yaml
 
 labels:
 - pairs:

@@ -10,3 +10,4 @@ patches:
 - path: patches/llm-replicas-vision.yaml
 - path: patches/llm-replicas-puzzle.yaml
 - path: patches/llm-replicas-text.yaml
+- path: patches/training-scale.yaml

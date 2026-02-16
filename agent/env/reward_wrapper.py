@@ -85,26 +85,6 @@ class RewardWrapper(gym.Wrapper):
         self._prev_maku_dialog = False
         self._prev_gnarled_key = False
 
-        # Distance-from-start exploration bonus — rewards agent for reaching
-        # rooms further from the starting position (pokemonred_puffer style).
-        # Only active in overworld (group 0) to avoid reward spikes from
-        # non-overworld room IDs that are in completely different ranges.
-        self._distance_bonus = cfg.get("distance_bonus", 5.0)
-        self._max_distance = 0
-        self._start_row = 0
-        self._start_col = 0
-
-        # Directional exploration bonus — biases exploration toward the Maku
-        # Tree which is east then north of the starting position.
-        # Decays based on DISTANCE ACHIEVED (not steps elapsed), so it
-        # stays strong until the agent actually goes east/north. Once the
-        # agent reaches the Maku Tree area (~9 units), the bonus has faded
-        # enough to allow westward movement to Dungeon 1.
-        self._directional_bonus = cfg.get("directional_bonus", 20.0)
-        self._directional_decay = cfg.get("directional_decay", 0.999)
-        self._min_row_reached = 0
-        self._max_col_reached = 0
-
         # Stagnation-based truncation — end episode early if agent hasn't
         # discovered any new TILES for this many steps.  Tile-based (not
         # room-based) so the agent can transit through known rooms.
@@ -261,22 +241,30 @@ class RewardWrapper(gym.Wrapper):
     def reset(self, **kwargs) -> tuple[np.ndarray, dict[str, Any]]:
         obs, info = self.env.reset(**kwargs)
 
-        # Snapshot baseline state
+        # Snapshot baseline state from actual RAM — critical for curriculum
+        # learning where different save states start with different items,
+        # rupees, keys, and quest flags already set.
         self._prev_health = info.get("health", 0)
-        self._prev_rupees = 0
-        self._prev_keys = 0
-        self._prev_sword = self.env._read(SWORD_LEVEL) if hasattr(self.env, "_read") else 0
-        self._prev_essences = 0
         self._prev_group = info.get("active_group", 0)
         self._prev_dungeon_floor = info.get("dungeon_floor", 0)
-
-        # Distance tracking — overworld grid is 16 columns wide
-        start_room = info.get("room_id", 0)
-        self._start_row = start_room // 16
-        self._start_col = start_room % 16
-        self._max_distance = 0
-        self._min_row_reached = self._start_row
-        self._max_col_reached = self._start_col
+        if hasattr(self.env, "_read"):
+            self._prev_rupees = self.env._read16(RUPEES)
+            self._prev_keys = self.env._read(DUNGEON_KEYS)
+            self._prev_sword = self.env._read(SWORD_LEVEL)
+            self._prev_essences = bin(self.env._read(ESSENCES_COLLECTED)).count("1")
+            self._prev_maku_dialog = bool(
+                self.env._read(GNARLED_KEY_GIVEN_FLAG) & GNARLED_KEY_GIVEN_MASK
+            )
+            self._prev_gnarled_key = bool(
+                self.env._read(GNARLED_KEY_OBTAINED) & GNARLED_KEY_OBTAINED_MASK
+            )
+        else:
+            self._prev_rupees = 0
+            self._prev_keys = 0
+            self._prev_sword = 0
+            self._prev_essences = 0
+            self._prev_maku_dialog = False
+            self._prev_gnarled_key = False
 
         # Reset sub-modules
         self._coverage.reset()
@@ -287,8 +275,6 @@ class RewardWrapper(gym.Wrapper):
         self._prev_room_id = info.get("room_id", -1)
         self._dialog_rooms.clear()
         self._prev_dialog_active = False
-        self._prev_maku_dialog = False
-        self._prev_gnarled_key = False
 
         # Reset milestones for new episode
         self._milestone_got_sword = False
@@ -377,7 +363,6 @@ class RewardWrapper(gym.Wrapper):
         info["unique_rooms"] = new_rooms
         info["unique_tiles"] = self._coverage.total_tiles
         info["seen_coords"] = self._coverage.total_tiles  # Pokemon Red-style coord count
-        info["max_distance"] = self._max_distance
 
         # Progression milestones (available every step, reported at episode end)
         info["milestone_got_sword"] = float(self._milestone_got_sword)
@@ -520,44 +505,6 @@ class RewardWrapper(gym.Wrapper):
             if exit_delta != 0:
                 reward += exit_delta * self._exit_seeking_scale
             self._prev_exit_dist = cur_exit_dist
-
-            # Distance-from-start bonus (overworld only).
-            # Only reward EASTWARD and NORTHWARD distance (toward the Maku
-            # Tree), not absolute Manhattan distance — absolute distance
-            # rewarded going south/west equally, causing the agent to
-            # explore the wrong side of the map.
-            room_id = info.get("room_id", 0)
-            cur_row = room_id // 16
-            cur_col = room_id % 16
-            if active_group == 0:
-                east_dist = max(cur_col - self._start_col, 0)
-                north_dist = max(self._start_row - cur_row, 0)
-                directed_distance = east_dist + north_dist
-                if directed_distance > self._max_distance:
-                    # Scaling distance bonus: each unit further from start
-                    # is worth more. distance_bonus * d for each new unit d.
-                    # E.g. 1st unit=5, 2nd=10, 3rd=15... creating an
-                    # accelerating incentive to push further from start.
-                    for d in range(self._max_distance + 1, directed_distance + 1):
-                        reward += self._distance_bonus * d
-                    self._max_distance = directed_distance
-
-                # Directional progress bonus — the Maku Tree is east then
-                # north of start. Reward both eastward (higher col) and
-                # northward (lower row) progress. Decays based on distance
-                # achieved so it stays strong until the agent actually goes
-                # east/north, then fades to allow westward to Dungeon 1.
-                dir_bonus = self._directional_bonus * (
-                    self._directional_decay ** (self._max_distance * 500)
-                )
-                if cur_col > self._max_col_reached:
-                    cols_east = cur_col - self._max_col_reached
-                    reward += dir_bonus * cols_east
-                    self._max_col_reached = cur_col
-                if cur_row < self._min_row_reached:
-                    rows_north = self._min_row_reached - cur_row
-                    reward += dir_bonus * rows_north
-                    self._min_row_reached = cur_row
 
             # Coverage reward with area-based boost
             coverage = self._coverage.step(

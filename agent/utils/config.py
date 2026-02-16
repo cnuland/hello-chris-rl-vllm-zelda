@@ -40,9 +40,6 @@ class RewardConfig(BaseModel):
     dialog_bonus: float = 3.0
     maku_dialog: float = 30.0
     gnarled_key: float = 30.0
-    distance_bonus: float = 5.0
-    directional_bonus: float = 20.0
-    directional_decay: float = 0.999
     area_boost_overworld: float = 1.0
     area_boost_subrosia: float = 1.5
     area_boost_maku: float = 3.0

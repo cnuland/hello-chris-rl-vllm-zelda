@@ -38,10 +38,13 @@ import os
 import sys
 import tempfile
 
-import ray
-from ray.tune import Stopper
-
-from agent.rl.trainer import create_ppo_config
+try:
+    import ray
+    from ray.tune import Stopper
+    from agent.rl.trainer import create_ppo_config
+    HAS_RAY = True
+except ImportError:
+    HAS_RAY = False
 
 # Force unbuffered stdout so logs appear in real-time
 sys.stdout.reconfigure(line_buffering=True)
