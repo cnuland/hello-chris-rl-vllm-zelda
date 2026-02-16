@@ -23,9 +23,9 @@ spec:
       name: quay-push-credentials
   resources:
     requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
       cpu: "4"
       memory: 8Gi
-    limits:
-      cpu: "8"
-      memory: 16Gi
   runPolicy: Serial
