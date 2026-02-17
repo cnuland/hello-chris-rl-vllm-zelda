@@ -58,31 +58,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class EpochStopper(Stopper):
-    """Stop after a fixed number of NEW timesteps per epoch.
+if HAS_RAY:
+    class EpochStopper(Stopper):
+        """Stop after a fixed number of NEW timesteps per epoch.
 
-    Unlike a raw timesteps_total stop, this tracks the starting timestep
-    when the first result arrives (which includes restored checkpoint steps)
-    and stops after epoch_steps additional steps.
-    """
+        Unlike a raw timesteps_total stop, this tracks the starting timestep
+        when the first result arrives (which includes restored checkpoint steps)
+        and stops after epoch_steps additional steps.
+        """
 
-    def __init__(self, epoch_steps: int):
-        self._epoch_steps = epoch_steps
-        self._start_ts: int | None = None
+        def __init__(self, epoch_steps: int):
+            self._epoch_steps = epoch_steps
+            self._start_ts: int | None = None
 
-    def __call__(self, trial_id: str, result: dict) -> bool:
-        ts = result.get("timesteps_total", 0)
-        if self._start_ts is None:
-            self._start_ts = ts
-            logger.info(
-                "EpochStopper: starting at %d, will stop at %d",
-                self._start_ts,
-                self._start_ts + self._epoch_steps,
-            )
-        return (ts - self._start_ts) >= self._epoch_steps
+        def __call__(self, trial_id: str, result: dict) -> bool:
+            ts = result.get("timesteps_total", 0)
+            if self._start_ts is None:
+                self._start_ts = ts
+                logger.info(
+                    "EpochStopper: starting at %d, will stop at %d",
+                    self._start_ts,
+                    self._start_ts + self._epoch_steps,
+                )
+            return (ts - self._start_ts) >= self._epoch_steps
 
-    def stop_all(self) -> bool:
-        return False
+        def stop_all(self) -> bool:
+            return False
 
 
 def make_wrapped_env(config: dict):
