@@ -12,15 +12,14 @@ RUN apt-get update -o Acquire::AllowInsecureRepositories=true && \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN useradd -m -s /bin/bash trainer
-USER trainer
+# Create non-root user with GID 0 for OpenShift compatibility
+# OpenShift runs containers with a random UID but always GID 0
+RUN useradd -m -s /bin/bash -g 0 trainer
 WORKDIR /home/trainer
 
-# Install Python dependencies
-COPY --chown=trainer:trainer pyproject.toml ./
-# torch + numpy already in base image, don't reinstall
-RUN pip install --no-cache-dir --user \
+# Install Python dependencies as root (system-wide, accessible to any UID)
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir \
     "pufferlib>=2.0" \
     "pyboy>=2.6.0" \
     "gymnasium>=0.29.0" \
@@ -30,18 +29,23 @@ RUN pip install --no-cache-dir --user \
     "PyYAML>=6.0" \
     "pydantic>=2.0.0"
 
-# Copy application code
-COPY --chown=trainer:trainer agent/ ./agent/
-COPY --chown=trainer:trainer scripts/ ./scripts/
-COPY --chown=trainer:trainer data/ ./data/
+# Copy application code (owned by root group for OpenShift random UID)
+COPY agent/ ./agent/
+COPY scripts/ ./scripts/
+COPY data/ ./data/
 
 # ROM files are downloaded from MinIO at startup (gitignored, not in repo)
-RUN mkdir -p /home/trainer/roms && chmod +x /home/trainer/scripts/entrypoint.sh
+# Make home dir and roms dir writable by GID 0
+RUN mkdir -p /home/trainer/roms && \
+    chgrp -R 0 /home/trainer && \
+    chmod -R g=u /home/trainer
+
+USER trainer
 
 ENV ROM_PATH=/home/trainer/roms/zelda.gbc
 ENV SAVE_STATE_PATH=""
 ENV PYTHONPATH=/home/trainer
-ENV PATH="/home/trainer/.local/bin:${PATH}"
+ENV PYTHONUNBUFFERED=1
 
 ENTRYPOINT ["bash", "/home/trainer/scripts/entrypoint.sh"]
 CMD ["python", "scripts/train_pufferlib.py"]
