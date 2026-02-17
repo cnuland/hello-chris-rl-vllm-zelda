@@ -11,9 +11,9 @@ Environment variables:
   NUM_ENVS       -- Total parallel environments (default 24)
   NUM_WORKERS    -- Worker processes for env vectorization (default 8)
   EPISODE_LENGTH -- Steps per episode (default 30,000)
-  BATCH_SIZE     -- PPO batch size (default: num_envs * 128)
+  NUM_STEPS      -- Rollout length per env per update (default 128)
   MINIBATCH_SIZE -- PPO minibatch size (default 2048)
-  USE_LSTM       -- Use LSTM recurrent policy (default true)
+  USE_LSTM       -- Use LSTM recurrent policy (default false)
   ENTROPY_START  -- Starting entropy coefficient (default 0.05)
   ENTROPY_END    -- Final entropy coefficient (default 0.015)
   LR_START       -- Starting learning rate (default 3e-4)
@@ -39,6 +39,7 @@ from functools import partial
 
 import numpy as np
 import torch
+import torch.nn as nn
 
 import pufferlib
 import pufferlib.emulation
@@ -85,10 +86,14 @@ def make_env(
     reward_model_path: str = "",
     enable_export: bool = True,
     stagnation_limit: int = 1500,
+    buf=None,
+    seed=None,
 ):
     """Create a GymnasiumPufferEnv-wrapped RewardWrapper(ZeldaEnv).
 
     Used as the factory function for pufferlib.vector.make().
+    PufferLib 3.0 passes ``buf`` and ``seed`` to the factory when
+    creating environments inside worker processes.
     """
     from agent.env.reward_wrapper import RewardWrapper
     from agent.env.zelda_env import ZeldaEnv
@@ -112,7 +117,9 @@ def make_env(
         epoch=epoch,
         stagnation_limit=stagnation_limit,
     )
-    return pufferlib.emulation.GymnasiumPufferEnv(wrapped)
+    return pufferlib.emulation.GymnasiumPufferEnv(
+        wrapped, buf=buf, seed=seed if seed is not None else 0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +233,7 @@ def upload_metadata(epoch: int, metadata: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Training epoch
+# PPO Training
 # ---------------------------------------------------------------------------
 
 def run_training_epoch(
@@ -245,9 +252,16 @@ def run_training_epoch(
     rm_path: str,
     prev_checkpoint: str,
     save_state_path: str,
+    num_steps: int = 128,
     minibatch_size: int = 2048,
+    gamma: float = 0.999,
+    gae_lambda: float = 0.95,
+    update_epochs: int = 2,
+    clip_coef: float = 0.2,
+    vf_coef: float = 0.5,
+    max_grad_norm: float = 0.5,
 ) -> tuple[str, float, dict]:
-    """Run one epoch of PufferLib PPO training.
+    """Run one epoch of CleanRL-style PPO training with PufferLib envs.
 
     Returns:
         (checkpoint_path, mean_reward, metadata_dict)
@@ -287,7 +301,11 @@ def run_training_epoch(
         backend=pufferlib.vector.Multiprocessing,
         num_envs=num_envs,
         num_workers=num_workers,
+        overwork=True,  # container cgroup limits != physical cores
     )
+
+    # Get observation size from the vecenv
+    obs_size = int(np.prod(vecenv.single_observation_space.shape))
 
     # Create policy
     policy = ZeldaPolicy(vecenv, hidden_size=256).to(device)
@@ -298,94 +316,203 @@ def run_training_epoch(
     # Load from previous checkpoint if available
     if prev_checkpoint and os.path.exists(prev_checkpoint):
         load_checkpoint(policy, optimizer, prev_checkpoint, str(device))
-        # Override LR from schedule (checkpoint may have different LR)
         for pg in optimizer.param_groups:
             pg["lr"] = lr
 
-    # PufferLib training config
-    batch_size = num_envs * 128
-    batch_size_env = os.getenv("BATCH_SIZE", "")
-    if batch_size_env and batch_size_env != "auto":
-        batch_size = int(batch_size_env)
+    # PPO batch dimensions
+    batch_size = num_envs * num_steps
+    if minibatch_size > batch_size:
+        minibatch_size = batch_size
+    num_iterations = max(1, epoch_steps // batch_size)
 
-    config = pufferlib.namespace(
-        device=str(device),
-        learning_rate=lr,
-        gamma=0.999,
-        gae_lambda=0.95,
-        update_epochs=2,
-        clip_coef=0.2,
-        vf_clip_coef=10.0,
-        vf_coef=0.5,
-        ent_coef=entropy_coeff,
-        max_grad_norm=0.5,
-        batch_size=batch_size,
-        minibatch_size=min(minibatch_size, batch_size),
-        bptt_horizon=32 if use_lstm else 128,
-        anneal_lr=False,
-        total_timesteps=epoch_steps,
-        checkpoint_interval=0,
-        seed=42 + epoch,
-        compile=False,
-        data_dir=checkpoint_dir,
+    logger.info(
+        "PPO: num_steps=%d, batch_size=%d, minibatch=%d, iterations=%d, "
+        "update_epochs=%d, gamma=%.3f, gae_lambda=%.2f, clip=%.2f",
+        num_steps, batch_size, minibatch_size, num_iterations,
+        update_epochs, gamma, gae_lambda, clip_coef,
     )
 
-    # Create PufferLib trainer
-    trainer = pufferlib.PuffeRL(
-        config=config,
-        vecenv=vecenv,
-        policy=policy,
-        optimizer=optimizer,
-    )
+    # Rollout storage (on device)
+    obs_buf = torch.zeros((num_steps, num_envs, obs_size), dtype=torch.float32, device=device)
+    actions_buf = torch.zeros((num_steps, num_envs), dtype=torch.long, device=device)
+    logprobs_buf = torch.zeros((num_steps, num_envs), dtype=torch.float32, device=device)
+    rewards_buf = torch.zeros((num_steps, num_envs), dtype=torch.float32, device=device)
+    dones_buf = torch.zeros((num_steps, num_envs), dtype=torch.float32, device=device)
+    values_buf = torch.zeros((num_steps, num_envs), dtype=torch.float32, device=device)
 
-    # Training loop
-    steps_this_epoch = 0
-    rewards_history = []
-    episode_lengths = []
+    # Reset environment
+    obs_np, _ = vecenv.reset(seed=42 + epoch)
+    obs = torch.tensor(np.asarray(obs_np), dtype=torch.float32, device=device)
+    done = torch.zeros(num_envs, dtype=torch.float32, device=device)
+
+    # Episode tracking
+    ep_rewards = np.zeros(num_envs, dtype=np.float64)
+    ep_lengths = np.zeros(num_envs, dtype=np.int64)
+    completed_rewards = []
+    completed_lengths = []
+
+    global_step = 0
     start_time = time.time()
-    log_interval = 10
-    iteration = 0
+    log_interval = max(1, num_iterations // 20)
 
-    logger.info("Starting training loop (target: %s steps)...", f"{epoch_steps:,}")
+    logger.info("Starting training loop (target: %s steps, %d iterations)...",
+                f"{epoch_steps:,}", num_iterations)
 
-    while not trainer.done:
-        trainer.evaluate()
-        trainer.train()
-        stats = trainer.log()
-        iteration += 1
+    for iteration in range(1, num_iterations + 1):
+        # ---- Collect rollout ----
+        for step in range(num_steps):
+            with torch.no_grad():
+                logits, value = policy(obs)
+                dist = torch.distributions.Categorical(logits=logits)
+                action = dist.sample()
+                logprob = dist.log_prob(action)
 
-        if stats:
-            steps_this_epoch = stats.get("overview/agent_steps", steps_this_epoch)
-            mean_reward = stats.get("environment/episode_return", 0)
-            mean_length = stats.get("environment/episode_length", 0)
-            sps = stats.get("overview/SPS", 0)
+            obs_buf[step] = obs
+            actions_buf[step] = action
+            logprobs_buf[step] = logprob
+            values_buf[step] = value
+            dones_buf[step] = done
 
-            if mean_reward != 0:
-                rewards_history.append(mean_reward)
-            if mean_length != 0:
-                episode_lengths.append(mean_length)
+            next_obs_np, reward_np, terminal_np, truncated_np, infos = vecenv.step(
+                action.cpu().numpy()
+            )
 
-            if iteration % log_interval == 0:
-                elapsed = time.time() - start_time
-                logger.info(
-                    "Epoch %d | Iter %d | Steps: %s/%s | SPS: %.0f | "
-                    "Reward: %.1f | EpLen: %.0f | Time: %.0fs",
-                    epoch, iteration, f"{steps_this_epoch:,}",
-                    f"{epoch_steps:,}", sps, mean_reward, mean_length,
-                    elapsed,
+            reward_np = np.asarray(reward_np, dtype=np.float32)
+            terminal_np = np.asarray(terminal_np, dtype=bool)
+            truncated_np = np.asarray(truncated_np, dtype=bool)
+            done_np = np.logical_or(terminal_np, truncated_np)
+
+            rewards_buf[step] = torch.tensor(reward_np, device=device)
+            done = torch.tensor(done_np, dtype=torch.float32, device=device)
+
+            # Track episode stats
+            ep_rewards += reward_np
+            ep_lengths += 1
+            for i in range(num_envs):
+                if done_np[i]:
+                    completed_rewards.append(float(ep_rewards[i]))
+                    completed_lengths.append(int(ep_lengths[i]))
+                    ep_rewards[i] = 0.0
+                    ep_lengths[i] = 0
+
+            obs = torch.tensor(np.asarray(next_obs_np), dtype=torch.float32, device=device)
+            global_step += num_envs
+
+        # ---- Compute GAE advantages ----
+        with torch.no_grad():
+            _, next_value = policy(obs)
+            advantages = torch.zeros_like(rewards_buf)
+            lastgaelam = 0.0
+            for t in reversed(range(num_steps)):
+                if t == num_steps - 1:
+                    nextnonterminal = 1.0 - done
+                    nextvalues = next_value
+                else:
+                    nextnonterminal = 1.0 - dones_buf[t + 1]
+                    nextvalues = values_buf[t + 1]
+                delta = rewards_buf[t] + gamma * nextvalues * nextnonterminal - values_buf[t]
+                advantages[t] = lastgaelam = (
+                    delta + gamma * gae_lambda * nextnonterminal * lastgaelam
+                )
+            returns = advantages + values_buf
+
+        # ---- PPO update ----
+        b_obs = obs_buf.reshape(-1, obs_size)
+        b_logprobs = logprobs_buf.reshape(-1)
+        b_actions = actions_buf.reshape(-1)
+        b_advantages = advantages.reshape(-1)
+        b_returns = returns.reshape(-1)
+        b_values = values_buf.reshape(-1)
+
+        total_pg_loss = 0.0
+        total_v_loss = 0.0
+        total_entropy = 0.0
+        total_approx_kl = 0.0
+        num_updates = 0
+
+        for _update_epoch in range(update_epochs):
+            indices = torch.randperm(batch_size, device=device)
+            for start in range(0, batch_size, minibatch_size):
+                end = start + minibatch_size
+                mb_idx = indices[start:end]
+
+                new_logits, new_value = policy(b_obs[mb_idx])
+                new_dist = torch.distributions.Categorical(logits=new_logits)
+                new_logprob = new_dist.log_prob(b_actions[mb_idx])
+                entropy = new_dist.entropy()
+
+                logratio = new_logprob - b_logprobs[mb_idx]
+                ratio = logratio.exp()
+
+                # Approximate KL for diagnostics
+                with torch.no_grad():
+                    approx_kl = ((ratio - 1) - logratio).mean()
+
+                mb_advantages = b_advantages[mb_idx]
+                mb_advantages = (mb_advantages - mb_advantages.mean()) / (
+                    mb_advantages.std() + 1e-8
                 )
 
-    # Compute final stats
-    elapsed = time.time() - start_time
-    avg_reward = float(np.mean(rewards_history[-20:])) if rewards_history else 0.0
-    avg_length = float(np.mean(episode_lengths[-20:])) if episode_lengths else 0.0
+                # Clipped policy loss
+                pg_loss1 = -mb_advantages * ratio
+                pg_loss2 = -mb_advantages * torch.clamp(
+                    ratio, 1 - clip_coef, 1 + clip_coef
+                )
+                pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-    logger.info("Epoch %d complete: %.0fs, avg_reward=%.1f, avg_length=%.0f",
-                epoch, elapsed, avg_reward, avg_length)
+                # Value loss
+                v_loss = 0.5 * ((new_value - b_returns[mb_idx]) ** 2).mean()
+
+                # Entropy bonus
+                entropy_loss = entropy.mean()
+
+                loss = pg_loss - entropy_coeff * entropy_loss + vf_coef * v_loss
+
+                optimizer.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
+                optimizer.step()
+
+                total_pg_loss += pg_loss.item()
+                total_v_loss += v_loss.item()
+                total_entropy += entropy_loss.item()
+                total_approx_kl += approx_kl.item()
+                num_updates += 1
+
+        # ---- Logging ----
+        if iteration % log_interval == 0 or iteration == num_iterations:
+            elapsed = time.time() - start_time
+            sps = global_step / elapsed if elapsed > 0 else 0
+            recent_rewards = completed_rewards[-50:] if completed_rewards else [0]
+            recent_lengths = completed_lengths[-50:] if completed_lengths else [0]
+            logger.info(
+                "Epoch %d | Iter %d/%d | Steps: %s/%s | SPS: %.0f | "
+                "Reward: %.1f | EpLen: %.0f | PgLoss: %.4f | VLoss: %.4f | "
+                "Entropy: %.3f | KL: %.4f",
+                epoch, iteration, num_iterations,
+                f"{global_step:,}", f"{epoch_steps:,}", sps,
+                np.mean(recent_rewards), np.mean(recent_lengths),
+                total_pg_loss / max(num_updates, 1),
+                total_v_loss / max(num_updates, 1),
+                total_entropy / max(num_updates, 1),
+                total_approx_kl / max(num_updates, 1),
+            )
+
+    # ---- Epoch summary ----
+    elapsed = time.time() - start_time
+    avg_reward = float(np.mean(completed_rewards[-20:])) if completed_rewards else 0.0
+    avg_length = float(np.mean(completed_lengths[-20:])) if completed_lengths else 0.0
+
+    logger.info(
+        "Epoch %d complete: %.0fs, avg_reward=%.1f, avg_length=%.0f, "
+        "episodes=%d, global_steps=%s",
+        epoch, elapsed, avg_reward, avg_length, len(completed_rewards),
+        f"{global_step:,}",
+    )
 
     # Save checkpoint
     ckpt_path = save_checkpoint(
-        policy, optimizer, epoch, steps_this_epoch, avg_reward, checkpoint_dir,
+        policy, optimizer, epoch, global_step, avg_reward, checkpoint_dir,
     )
     upload_checkpoint_to_minio(ckpt_path, epoch)
 
@@ -394,14 +521,15 @@ def run_training_epoch(
         "epoch": epoch,
         "checkpoint": ckpt_path,
         "reward_mean": avg_reward,
-        "reward_max": float(max(rewards_history)) if rewards_history else 0,
-        "reward_min": float(min(rewards_history)) if rewards_history else 0,
-        "timesteps": steps_this_epoch,
+        "reward_max": float(max(completed_rewards)) if completed_rewards else 0,
+        "reward_min": float(min(completed_rewards)) if completed_rewards else 0,
+        "timesteps": global_step,
         "elapsed_seconds": elapsed,
         "entropy_coeff": entropy_coeff,
         "learning_rate": lr,
         "god_mode": god_mode,
         "num_envs": num_envs,
+        "episodes_completed": len(completed_rewards),
         "best_mean": avg_reward,
     }
 
@@ -412,10 +540,10 @@ def run_training_epoch(
 
     logger.info("  Mean reward: %.2f", avg_reward)
     logger.info("  Mean episode length: %.0f", avg_length)
-    logger.info("  Total steps: %s", f"{steps_this_epoch:,}")
+    logger.info("  Total steps: %s", f"{global_step:,}")
 
     # Cleanup
-    trainer.close()
+    vecenv.close()
 
     return ckpt_path, avg_reward, metadata
 
@@ -431,6 +559,7 @@ def main():
     num_envs = int(os.getenv("NUM_ENVS", "24"))
     num_workers = int(os.getenv("NUM_WORKERS", "8"))
     ep_length = int(os.getenv("EPISODE_LENGTH", "30000"))
+    num_steps = int(os.getenv("NUM_STEPS", "128"))
     minibatch_size = int(os.getenv("MINIBATCH_SIZE", "2048"))
     use_lstm = os.getenv("USE_LSTM", "false").lower() in ("true", "1", "yes")
     run_eval = os.getenv("RUN_EVAL", "true").lower() in ("true", "1", "yes")
@@ -521,6 +650,7 @@ def main():
             rm_path=rm_path,
             prev_checkpoint=global_best_checkpoint,
             save_state_path=save_state_path,
+            num_steps=num_steps,
             minibatch_size=minibatch_size,
         )
 

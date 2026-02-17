@@ -26,7 +26,6 @@ spec:
       - name: pufferlib-trainer
         image: quay.io/cnuland/zelda-pufferlib-trainer:latest
         imagePullPolicy: Always
-        command: ["python", "scripts/train_pufferlib.py"]
         resources:
           requests:
             cpu: "20"
