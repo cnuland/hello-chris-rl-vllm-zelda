@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class ZeldaAction(IntEnum):
-    """Game Boy button mapping."""
+    """Game Boy button mapping (legacy Discrete(7) reference)."""
 
     NOP = 0
     UP = 1
@@ -29,6 +29,39 @@ class ZeldaAction(IntEnum):
     A = 5
     B = 6
     START = 7  # Opens inventory for item switching
+
+
+class MovementAction(IntEnum):
+    """Movement dimension of MultiDiscrete action."""
+
+    NOP = 0
+    UP = 1
+    DOWN = 2
+    LEFT = 3
+    RIGHT = 4
+
+
+class ButtonAction(IntEnum):
+    """Button dimension of MultiDiscrete action."""
+
+    NOP = 0
+    A = 1
+    B = 2
+
+
+# Map MultiDiscrete enums to ZeldaAction for press/release event lookup
+_MOVEMENT_TO_ZELDA = {
+    MovementAction.NOP: ZeldaAction.NOP,
+    MovementAction.UP: ZeldaAction.UP,
+    MovementAction.DOWN: ZeldaAction.DOWN,
+    MovementAction.LEFT: ZeldaAction.LEFT,
+    MovementAction.RIGHT: ZeldaAction.RIGHT,
+}
+_BUTTON_TO_ZELDA = {
+    ButtonAction.NOP: ZeldaAction.NOP,
+    ButtonAction.A: ZeldaAction.A,
+    ButtonAction.B: ZeldaAction.B,
+}
 
 # RAM addresses — oracles-disasm confirmed (Seasons-specific)
 # Link object struct at w1Link = $D000, SpecialObjectStruct layout
@@ -101,11 +134,10 @@ class ZeldaEnv(gym.Env):
         self._pyboy = None
         self._initial_state: bytes | None = None
 
-        # Spaces
-        # Exclude START (action 7) — menu wastes episode time and the agent
-        # hasn't learned useful item switching.  START can be re-enabled later
-        # via an LLM judge sub-policy for inventory management.
-        self.action_space = spaces.Discrete(7)  # NOP, UP, DOWN, LEFT, RIGHT, A, B
+        # Spaces — MultiDiscrete allows simultaneous movement + button press.
+        # Dimension 0: movement (5) — NOP, UP, DOWN, LEFT, RIGHT
+        # Dimension 1: button (3) — NOP, A, B
+        self.action_space = spaces.MultiDiscrete([5, 3])
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(128,), dtype=np.float32
         )
@@ -114,8 +146,10 @@ class ZeldaEnv(gym.Env):
         self.step_count = 0
         self.episode_count = 0
         self._initial_deaths = 0
-        self._last_action: ZeldaAction | None = None
+        self._last_movement: ZeldaAction | None = None
+        self._last_button: ZeldaAction | None = None
         self._prev_room = 0
+        self._last_valid_obs: np.ndarray | None = None
 
         # WindowEvent mappings (proven to work with PyBoy)
         self._press_events: dict[ZeldaAction, Any] = {}
@@ -467,9 +501,11 @@ class ZeldaEnv(gym.Env):
         self.step_count = 0
         self.episode_count += 1
         self._initial_deaths = self._read16(_DEATH_COUNT)
-        self._last_action = None
+        self._last_movement = None
+        self._last_button = None
 
         obs = self._get_obs()
+        self._last_valid_obs = obs.copy()
         info = self._get_info()
         return obs, info
 
@@ -480,22 +516,41 @@ class ZeldaEnv(gym.Env):
         self._pyboy.memory[_MENU_STATE] = 0
         logger.debug("Menu dismissed via RAM write")
 
-    def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
-        act = ZeldaAction(action)
+    def step(self, action) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+        # MultiDiscrete: action = [movement, button]
+        action = np.asarray(action).flatten()
+        move_idx = int(action[0])
+        btn_idx = int(action[1])
+
+        move_act = _MOVEMENT_TO_ZELDA[MovementAction(move_idx)]
+        btn_act = _BUTTON_TO_ZELDA[ButtonAction(btn_idx)]
 
         # Force-release SELECT to prevent spamming
         self._release_select()
 
-        # Release previous button first (matches proven old version)
-        if self._last_action is not None and self._last_action != ZeldaAction.NOP:
-            release_event = self._release_events.get(self._last_action)
+        # Release previous movement
+        if self._last_movement is not None and self._last_movement != ZeldaAction.NOP:
+            release_event = self._release_events.get(self._last_movement)
             if release_event:
                 self._pyboy.send_input(release_event)
 
-        # Press new button via WindowEvent
-        press_event = self._press_events.get(act)
-        if press_event:
-            self._pyboy.send_input(press_event)
+        # Release previous button
+        if self._last_button is not None and self._last_button != ZeldaAction.NOP:
+            release_event = self._release_events.get(self._last_button)
+            if release_event:
+                self._pyboy.send_input(release_event)
+
+        # Press new movement
+        if move_act != ZeldaAction.NOP:
+            press_event = self._press_events.get(move_act)
+            if press_event:
+                self._pyboy.send_input(press_event)
+
+        # Press new button
+        if btn_act != ZeldaAction.NOP:
+            press_event = self._press_events.get(btn_act)
+            if press_event:
+                self._pyboy.send_input(press_event)
 
         # Advance emulator — natural screen transitions handled by
         # the game engine (clean save state, no mid-fade hacks needed).
@@ -506,13 +561,25 @@ class ZeldaEnv(gym.Env):
             if self._god_mode:
                 self._pyboy.memory[_HEALTH] = self._pyboy.memory[_MAX_HEALTH]
 
-        self._last_action = act
+        self._last_movement = move_act
+        self._last_button = btn_act
 
         self.step_count += 1
         obs = self._get_obs()
         terminated = self._check_terminated()
         truncated = self.step_count >= self.max_steps
         info = self._get_info()
+
+        # During screen transitions, return cached observation.
+        # The room_id has changed but x/y coords still reflect the old room,
+        # so a fresh observation would encode incorrect position data.
+        if self.is_transitioning:
+            if self._last_valid_obs is not None:
+                obs = self._last_valid_obs.copy()
+            info["transitioning"] = True
+        else:
+            self._last_valid_obs = obs.copy()
+            info["transitioning"] = False
 
         # Reward is computed externally by the RL wrapper
         reward = 0.0

@@ -32,6 +32,10 @@ LINK_SWIMMING = 0xCC78     # wLinkSwimmingState (bit 7=diving, bit 6=lava)
 LINK_GRAB_STATE = 0xCC75   # wLinkGrabState ($00=normal, $41=grabbing, $C2=lifting, $83=holding)
 LINK_DEATH_TRIGGER = 0xCC34  # wLinkDeathTrigger (nonzero = kill Link)
 
+# --- Player pushing/collision state (oracles-disasm confirmed) ---
+LINK_PUSHING_DIRECTION = 0xCC65  # wLinkPushingDirection ($FF=not pushing, else direction)
+PUSHING_TILE_COUNTER = 0xCC84    # wPushingAgainstTileCounter (frames pushing against tile)
+
 # =============================================================================
 # Resources
 # =============================================================================
@@ -120,6 +124,8 @@ MENU_STATE = 0xCBCB          # wOpenedMenuType (1=inventory, 2=map, 3=save)
 GAME_STATE = 0xC2EE          # wGameState (0=loading, 2=gameplay)
 CUTSCENE_INDEX = 0xC2EF      # wCutsceneIndex
 SCREEN_TRANSITION = 0xCD00   # wScrollMode
+SCREEN_TRANSITION_STATE = 0xCD04  # wScreenTransitionState (nonzero during active scroll)
+SCREEN_TRANSITION_DIR = 0xCD02    # wScreenTransitionDirection (0=up,1=right,2=down,3=left)
 LOADING_SCREEN = 0xC2F2      # Loading state byte
 DISABLED_OBJECTS = 0xCCA4    # wDisabledObjects (bit 0=Link, 2=enemies, etc.)
 

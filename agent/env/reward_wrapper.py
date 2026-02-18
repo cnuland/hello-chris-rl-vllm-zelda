@@ -29,6 +29,7 @@ from agent.env.ram_addresses import (
     GNARLED_KEY_GIVEN_MASK,
     GNARLED_KEY_OBTAINED,
     GNARLED_KEY_OBTAINED_MASK,
+    LINK_PUSHING_DIRECTION,
     RUPEES,
     SWORD_LEVEL,
 )
@@ -62,6 +63,7 @@ class RewardWrapper(gym.Wrapper):
         self._death_penalty = cfg.get("death", -1.0)
         self._health_loss_scale = cfg.get("health_loss", -0.005)
         self._time_penalty = cfg.get("time_penalty", 0.0)
+        self._wall_collision_penalty = cfg.get("wall_collision", -0.01)
         self._sword_bonus = cfg.get("sword", 15.0)
         self._dungeon_bonus = cfg.get("dungeon", 15.0)
         self._maku_tree_bonus = cfg.get("maku_tree", 15.0)
@@ -91,6 +93,16 @@ class RewardWrapper(gym.Wrapper):
         self._stagnation_limit = stagnation_limit
         self._steps_since_discovery = 0
         self._prev_total_tiles = 0
+
+        # Pixel position tracking — used to gate coverage reward behind
+        # actual movement (prevents standing-still and wall-bump farming)
+        self._prev_pixel_x = 0
+        self._prev_pixel_y = 0
+
+        # Milestone-triggered stagnation reset — when a milestone fires,
+        # reset the stagnation counter so the agent can backtrack through
+        # known territory without being truncated.
+        self._milestone_achieved_this_step = False
 
         # Menu management — allow brief menu use for item switching,
         # but penalize camping and suppress exploration rewards while open
@@ -280,14 +292,23 @@ class RewardWrapper(gym.Wrapper):
         self._prev_room_id = info.get("room_id", -1)
         self._dialog_rooms.clear()
         self._prev_dialog_active = False
+        self._prev_pixel_x = info.get("pixel_x", 0)
+        self._prev_pixel_y = info.get("pixel_y", 0)
 
-        # Reset milestones for new episode
+        # Reset milestones for new episode — record what the save state
+        # already has so milestone reporting only counts NEW achievements.
         self._milestone_got_sword = False
         self._milestone_entered_dungeon = False
         self._milestone_visited_maku_tree = False
         self._milestone_essences = 0
         self._milestone_dungeon_keys = 0
         self._milestone_max_rooms = 0
+        # Save-state baseline: milestones already present at episode start
+        self._baseline_sword = self._prev_sword
+        self._baseline_essences = self._prev_essences
+        self._baseline_maku_dialog = self._prev_maku_dialog
+        self._baseline_gnarled_key = self._prev_gnarled_key
+        self._baseline_group = self._prev_group
         if self._shaping:
             self._shaping.reset()
 
@@ -305,12 +326,13 @@ class RewardWrapper(gym.Wrapper):
         info["epoch"] = self._epoch
         return obs, info
 
-    def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+    def step(self, action) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         obs, _, terminated, truncated, info = self.env.step(action)
 
         # Track rooms before reward computation for stagnation detection
         prev_rooms = self._coverage.unique_rooms
 
+        self._milestone_achieved_this_step = False
         reward = self._compute_reward(obs, info, terminated)
 
         # Tile-based stagnation — reset counter when ANY new tile is found.
@@ -323,11 +345,17 @@ class RewardWrapper(gym.Wrapper):
         new_rooms = self._coverage.unique_rooms
         new_tiles = self._coverage.total_tiles
         dialog_active = info.get("dialog_active", False)
+        is_transitioning = info.get("transitioning", False)
         if new_tiles > self._prev_total_tiles:
             self._steps_since_discovery = 0
-        elif not dialog_active:
+        elif not dialog_active and not is_transitioning:
             self._steps_since_discovery += 1
         self._prev_total_tiles = new_tiles
+
+        # Reset stagnation on milestone — the agent needs time to backtrack
+        # from milestone locations (Maku Tree, dungeons) through known territory
+        if self._milestone_achieved_this_step:
+            self._steps_since_discovery = 0
 
         if self._stagnation_limit > 0 and self._steps_since_discovery >= self._stagnation_limit:
             truncated = True
@@ -347,20 +375,21 @@ class RewardWrapper(gym.Wrapper):
         if (terminated or truncated) and self._exporter:
             self._exporter.end_episode()
 
-        # Update milestones from reward computation state
+        # Update milestones from reward computation state — only count
+        # achievements BEYOND what the save state already had (baseline).
         self._milestone_max_rooms = max(self._milestone_max_rooms, new_rooms)
         if hasattr(self.env, "_read"):
             sword = self.env._read(SWORD_LEVEL)
-            if sword > 0:
+            if sword > self._baseline_sword:
                 self._milestone_got_sword = True
             keys = self.env._read(DUNGEON_KEYS)
             self._milestone_dungeon_keys = max(self._milestone_dungeon_keys, keys)
             essences = bin(self.env._read(ESSENCES_COLLECTED)).count("1")
             self._milestone_essences = max(self._milestone_essences, essences)
         active_group = info.get("active_group", 0)
-        if active_group in (4, 5):
+        if active_group in (4, 5) and self._baseline_group not in (4, 5):
             self._milestone_entered_dungeon = True
-        if active_group == 2:
+        if active_group == 2 and self._baseline_group != 2:
             self._milestone_visited_maku_tree = True
 
         info["epoch"] = self._epoch
@@ -376,8 +405,12 @@ class RewardWrapper(gym.Wrapper):
         info["milestone_essences"] = float(self._milestone_essences)
         info["milestone_dungeon_keys"] = float(self._milestone_dungeon_keys)
         info["milestone_max_rooms"] = float(self._milestone_max_rooms)
-        info["milestone_maku_dialog"] = float(self._prev_maku_dialog)
-        info["milestone_gnarled_key"] = float(self._prev_gnarled_key)
+        info["milestone_maku_dialog"] = float(
+            self._prev_maku_dialog and not self._baseline_maku_dialog
+        )
+        info["milestone_gnarled_key"] = float(
+            self._prev_gnarled_key and not self._baseline_gnarled_key
+        )
 
         return obs, reward, terminated, truncated, info
 
@@ -400,6 +433,14 @@ class RewardWrapper(gym.Wrapper):
         # Time penalty
         reward += self._time_penalty
 
+        # Wall collision penalty — wLinkPushingDirection (oracles-disasm)
+        # is $FF when not pushing, else equals Link's direction. Penalize
+        # to discourage wasting steps pressing into walls/obstacles.
+        if hasattr(self.env, "_read"):
+            pushing = self.env._read(LINK_PUSHING_DIRECTION)
+            if pushing != 0xFF and not info.get("transitioning", False):
+                reward += self._wall_collision_penalty
+
         # Rupees (read from env if available)
         if hasattr(self.env, "_read16"):
             rupees = self.env._read16(RUPEES)
@@ -419,12 +460,14 @@ class RewardWrapper(gym.Wrapper):
             sword = self.env._read(SWORD_LEVEL)
             if sword > self._prev_sword:
                 reward += self._sword_bonus
+                self._milestone_achieved_this_step = True
             self._prev_sword = sword
 
             # Essences
             essences = bin(self.env._read(ESSENCES_COLLECTED)).count("1")
             if essences > self._prev_essences:
                 reward += self._dungeon_bonus
+                self._milestone_achieved_this_step = True
             self._prev_essences = essences
 
         # --- Progression rewards ---
@@ -434,10 +477,12 @@ class RewardWrapper(gym.Wrapper):
         # Dungeon entry bonus: ACTIVE_GROUP changed to 4 or 5
         if active_group in (4, 5) and self._prev_group not in (4, 5):
             reward += self._dungeon_entry_bonus
+            self._milestone_achieved_this_step = True
 
         # Maku Tree visit bonus: ACTIVE_GROUP changed to 2
         if active_group == 2 and self._prev_group != 2:
             reward += self._maku_tree_visit_bonus
+            self._milestone_achieved_this_step = True
 
         # Indoor area bonus: ACTIVE_GROUP changed to 3
         if active_group == 3 and self._prev_group != 3:
@@ -468,6 +513,7 @@ class RewardWrapper(gym.Wrapper):
             maku_dialog = bool(self.env._read(GNARLED_KEY_GIVEN_FLAG) & GNARLED_KEY_GIVEN_MASK)
             if maku_dialog and not self._prev_maku_dialog:
                 reward += self._maku_dialog_bonus
+                self._milestone_achieved_this_step = True
                 logger.info("MILESTONE: Maku Tree gave Gnarled Key quest! (+%.0f)", self._maku_dialog_bonus)
             self._prev_maku_dialog = maku_dialog
 
@@ -475,6 +521,7 @@ class RewardWrapper(gym.Wrapper):
             gnarled_key = bool(self.env._read(GNARLED_KEY_OBTAINED) & GNARLED_KEY_OBTAINED_MASK)
             if gnarled_key and not self._prev_gnarled_key:
                 reward += self._gnarled_key_bonus
+                self._milestone_achieved_this_step = True
                 logger.info("MILESTONE: Gnarled Key obtained! (+%.0f)", self._gnarled_key_bonus)
             self._prev_gnarled_key = gnarled_key
 
@@ -493,8 +540,9 @@ class RewardWrapper(gym.Wrapper):
         else:
             self._menu_steps = 0
 
-        # --- Exploration rewards (only when NOT in menu) ---
-        if not menu_active:
+        # --- Exploration rewards (only when NOT in menu and NOT transitioning) ---
+        is_transitioning = info.get("transitioning", False)
+        if not menu_active and not is_transitioning:
             # Backtrack penalty: penalize re-entering recently visited rooms
             room_id = info.get("room_id", 0)
             if room_id != self._prev_room_id:
@@ -511,14 +559,22 @@ class RewardWrapper(gym.Wrapper):
                 reward += exit_delta * self._exit_seeking_scale
             self._prev_exit_dist = cur_exit_dist
 
-            # Coverage reward with area-based boost
-            coverage = self._coverage.step(
-                info.get("room_id", 0),
-                info.get("pixel_x", 0),
-                info.get("pixel_y", 0),
-            )
-            area_mult = self._area_boost.get(active_group, 1.0)
-            reward += coverage * area_mult
+            # Coverage reward with area-based boost — only when the agent
+            # actually moved (prevents standing-still and wall-bump farming)
+            cur_pixel_x = info.get("pixel_x", 0)
+            cur_pixel_y = info.get("pixel_y", 0)
+            actually_moved = (cur_pixel_x != self._prev_pixel_x or
+                              cur_pixel_y != self._prev_pixel_y)
+            if actually_moved:
+                coverage = self._coverage.step(
+                    info.get("room_id", 0),
+                    cur_pixel_x,
+                    cur_pixel_y,
+                )
+                area_mult = self._area_boost.get(active_group, 1.0)
+                reward += coverage * area_mult
+            self._prev_pixel_x = cur_pixel_x
+            self._prev_pixel_y = cur_pixel_y
 
             # RND curiosity
             if self._rnd is not None:

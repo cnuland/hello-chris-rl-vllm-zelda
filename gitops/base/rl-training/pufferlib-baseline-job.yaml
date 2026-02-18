@@ -1,5 +1,5 @@
 # Baseline test: PufferLib PPO with single save, milestone tracking.
-# CPU-only, 12 envs, 500k steps/epoch, 6 epochs, god mode throughout.
+# GPU-accelerated, 48 envs, 500k steps/epoch, 6 epochs, god mode throughout.
 # Purpose: validate PufferLib learns on Zelda before adding complexity.
 apiVersion: batch/v1
 kind: Job
@@ -35,9 +35,11 @@ spec:
           requests:
             cpu: "12"
             memory: 24Gi
+            nvidia.com/gpu: "1"
           limits:
             cpu: "24"
             memory: 48Gi
+            nvidia.com/gpu: "1"
         env:
         # Training loop
         - name: EPOCH
@@ -47,26 +49,28 @@ spec:
         - name: EPOCH_STEPS
           value: "500000"
         - name: NUM_ENVS
-          value: "12"
+          value: "48"
         - name: NUM_WORKERS
-          value: "4"
+          value: "8"
         - name: EPISODE_LENGTH
-          value: "10000"
+          value: "30000"
         - name: MINIBATCH_SIZE
-          value: "1024"
+          value: "2048"
         - name: USE_LSTM
           value: "false"
-        # Scheduling — keep exploration pressure high
+        # Scheduling — lower entropy to let policy specialize
         - name: ENTROPY_START
-          value: "0.05"
+          value: "0.02"
         - name: ENTROPY_END
-          value: "0.03"
+          value: "0.005"
         - name: LR_START
           value: "3e-4"
         - name: LR_END
           value: "1e-5"
         - name: GOD_MODE_EPOCHS
           value: "6"
+        - name: STAGNATION_LIMIT
+          value: "5000"
         # Evaluation — skip LLM judges for baseline, just measure exploration
         - name: RUN_EVAL
           value: "false"

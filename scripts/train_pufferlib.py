@@ -14,11 +14,12 @@ Environment variables:
   NUM_STEPS      -- Rollout length per env per update (default 128)
   MINIBATCH_SIZE -- PPO minibatch size (default 2048)
   USE_LSTM       -- Use LSTM recurrent policy (default false)
-  ENTROPY_START  -- Starting entropy coefficient (default 0.05)
-  ENTROPY_END    -- Final entropy coefficient (default 0.015)
+  ENTROPY_START  -- Starting entropy coefficient (default 0.02)
+  ENTROPY_END    -- Final entropy coefficient (default 0.005)
   LR_START       -- Starting learning rate (default 3e-4)
   LR_END         -- Final learning rate (default 1e-5)
   GOD_MODE_EPOCHS -- Infinite health curriculum epochs (default 6)
+  STAGNATION_LIMIT -- Steps without new tile before episode truncation (default 5000)
   RUN_EVAL       -- Run LLM eval after training (default true)
   RUN_ADVISOR    -- Run LLM reward advisor (default true)
   CLEAN_START    -- Delete old MinIO data (default true)
@@ -85,7 +86,7 @@ def make_env(
     enable_shaping: bool = False,
     reward_model_path: str = "",
     enable_export: bool = True,
-    stagnation_limit: int = 1500,
+    stagnation_limit: int = 5000,
     buf=None,
     seed=None,
 ):
@@ -326,7 +327,7 @@ def run_training_epoch(
         enable_shaping=bool(rm_path),
         reward_model_path=rm_path,
         enable_export=True,
-        stagnation_limit=1500,
+        stagnation_limit=int(os.getenv("STAGNATION_LIMIT", "5000")),
     )
 
     vecenv = pufferlib.vector.make(
@@ -366,8 +367,10 @@ def run_training_epoch(
     )
 
     # Rollout storage (on device)
+    # MultiDiscrete: actions have shape (num_envs, 2) per step
+    num_action_dims = len(policy.nvec)  # 2: [movement, button]
     obs_buf = torch.zeros((num_steps, num_envs, obs_size), dtype=torch.float32, device=device)
-    actions_buf = torch.zeros((num_steps, num_envs), dtype=torch.long, device=device)
+    actions_buf = torch.zeros((num_steps, num_envs, num_action_dims), dtype=torch.long, device=device)
     logprobs_buf = torch.zeros((num_steps, num_envs), dtype=torch.float32, device=device)
     rewards_buf = torch.zeros((num_steps, num_envs), dtype=torch.float32, device=device)
     dones_buf = torch.zeros((num_steps, num_envs), dtype=torch.float32, device=device)
@@ -411,10 +414,12 @@ def run_training_epoch(
         # ---- Collect rollout ----
         for step in range(num_steps):
             with torch.no_grad():
-                logits, value = policy(obs)
-                dist = torch.distributions.Categorical(logits=logits)
-                action = dist.sample()
-                logprob = dist.log_prob(action)
+                logits_list, value = policy(obs)
+                # MultiDiscrete: sample each dimension independently
+                dists = [torch.distributions.Categorical(logits=lg) for lg in logits_list]
+                actions = [d.sample() for d in dists]
+                logprob = sum(d.log_prob(a) for d, a in zip(dists, actions))
+                action = torch.stack(actions, dim=-1)  # (num_envs, 2)
 
             obs_buf[step] = obs
             actions_buf[step] = action
@@ -499,7 +504,7 @@ def run_training_epoch(
         # ---- PPO update ----
         b_obs = obs_buf.reshape(-1, obs_size)
         b_logprobs = logprobs_buf.reshape(-1)
-        b_actions = actions_buf.reshape(-1)
+        b_actions = actions_buf.reshape(-1, num_action_dims)  # (batch, 2)
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values_buf.reshape(-1)
@@ -516,10 +521,18 @@ def run_training_epoch(
                 end = start + minibatch_size
                 mb_idx = indices[start:end]
 
-                new_logits, new_value = policy(b_obs[mb_idx])
-                new_dist = torch.distributions.Categorical(logits=new_logits)
-                new_logprob = new_dist.log_prob(b_actions[mb_idx])
-                entropy = new_dist.entropy()
+                new_logits_list, new_value = policy(b_obs[mb_idx])
+                # MultiDiscrete: reconstruct per-dimension distributions
+                new_dists = [
+                    torch.distributions.Categorical(logits=lg)
+                    for lg in new_logits_list
+                ]
+                mb_acts = b_actions[mb_idx]  # (mb, 2)
+                new_logprob = sum(
+                    d.log_prob(mb_acts[:, i])
+                    for i, d in enumerate(new_dists)
+                )
+                entropy = sum(d.entropy() for d in new_dists)
 
                 logratio = new_logprob - b_logprobs[mb_idx]
                 ratio = logratio.exp()
@@ -662,8 +675,8 @@ def main():
     run_eval = os.getenv("RUN_EVAL", "true").lower() in ("true", "1", "yes")
     clean_start = os.getenv("CLEAN_START", "true").lower() in ("true", "1", "yes")
 
-    entropy_start = float(os.getenv("ENTROPY_START", "0.05"))
-    entropy_end = float(os.getenv("ENTROPY_END", "0.015"))
+    entropy_start = float(os.getenv("ENTROPY_START", "0.02"))
+    entropy_end = float(os.getenv("ENTROPY_END", "0.005"))
     lr_start = float(os.getenv("LR_START", "3e-4"))
     lr_end = float(os.getenv("LR_END", "1e-5"))
     god_mode_epochs = int(os.getenv("GOD_MODE_EPOCHS", "6"))

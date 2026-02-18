@@ -22,7 +22,9 @@ class ZeldaPolicy(nn.Module):
     def __init__(self, env, hidden_size: int = 256):
         super().__init__()
         obs_size = int(np.prod(env.single_observation_space.shape))  # 128
-        num_actions = env.single_action_space.n  # 7
+
+        # MultiDiscrete action space: nvec = [5, 3] (movement x button)
+        self.nvec = list(env.single_action_space.nvec)
 
         # Policy trunk (encoder for actions)
         self.policy_encoder = nn.Sequential(
@@ -33,7 +35,10 @@ class ZeldaPolicy(nn.Module):
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
         )
-        self.policy_head = nn.Linear(hidden_size, num_actions)
+        # Separate head per action dimension: [Linear(256,5), Linear(256,3)]
+        self.policy_heads = nn.ModuleList([
+            nn.Linear(hidden_size, n) for n in self.nvec
+        ])
 
         # Value trunk (separate from policy)
         self.value_encoder = nn.Sequential(
@@ -51,8 +56,9 @@ class ZeldaPolicy(nn.Module):
             if isinstance(layer, nn.Linear):
                 nn.init.orthogonal_(layer.weight, gain=np.sqrt(2))
                 nn.init.zeros_(layer.bias)
-        nn.init.orthogonal_(self.policy_head.weight, gain=0.01)
-        nn.init.zeros_(self.policy_head.bias)
+        for head in self.policy_heads:
+            nn.init.orthogonal_(head.weight, gain=0.01)
+            nn.init.zeros_(head.bias)
 
         for layer in self.value_encoder:
             if isinstance(layer, nn.Linear):
@@ -83,9 +89,9 @@ class ZeldaPolicy(nn.Module):
             lookup: PufferLib lookup for action masking (unused)
 
         Returns:
-            (logits, value) tuple
+            (logits_list, value) where logits_list is [movement_logits, button_logits]
         """
-        logits = self.policy_head(hidden)
+        logits = [head(hidden) for head in self.policy_heads]
         value_hidden = self.value_encoder(self._obs_cache)
         value = self.value_head(value_hidden).squeeze(-1)
         return logits, value
