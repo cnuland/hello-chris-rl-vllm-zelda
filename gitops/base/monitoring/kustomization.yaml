@@ -5,6 +5,9 @@ namespace: zelda-rl
 resources:
 - servicemonitor.yaml
 - grafana-dashboard-cm.yaml
+- dashboard-deployment.yaml
+- dashboard-service.yaml
+- dashboard-route.yaml
 
 labels:
 - pairs:

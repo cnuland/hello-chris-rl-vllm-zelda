@@ -1,0 +1,19 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: zelda-training-dashboard
+  labels:
+    app: zelda-training-dashboard
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: monitoring
+spec:
+  to:
+    kind: Service
+    name: zelda-training-dashboard
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

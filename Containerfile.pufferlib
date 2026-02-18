@@ -27,7 +27,8 @@ RUN pip install --no-cache-dir \
     "boto3>=1.28.0" \
     "Pillow>=9.0.0" \
     "PyYAML>=6.0" \
-    "pydantic>=2.0.0"
+    "pydantic>=2.0.0" \
+    "flask>=3.0.0"
 
 # Copy application code (owned by root group for OpenShift random UID)
 COPY agent/ ./agent/
@@ -41,6 +42,8 @@ RUN mkdir -p /home/trainer/roms && \
     chmod -R g=u /home/trainer
 
 USER trainer
+
+EXPOSE 8080
 
 ENV ROM_PATH=/home/trainer/roms/zelda.gbc
 ENV SAVE_STATE_PATH=""
