@@ -158,7 +158,9 @@ def cleanup_after_epoch(epoch: int, global_best_checkpoint: str):
     """Free MinIO storage after each epoch to prevent disk-full crashes.
 
     1. Deletes episode recordings for this epoch (already scored by judge).
-    2. Deletes old Ray checkpoint experiments, keeping only the global best.
+    2. Deletes old checkpoint data, keeping only the global best.
+       Supports both Ray (ray-checkpoints/) and PufferLib
+       (pufferlib-checkpoints/) checkpoint layouts.
     """
     try:
         from agent.utils.s3 import S3Client
@@ -172,46 +174,62 @@ def cleanup_after_epoch(epoch: int, global_best_checkpoint: str):
         if deleted:
             logger.info("Cleaned %d episode objects for epoch %d", deleted, epoch)
 
-        # 2. Clean old Ray checkpoint experiments from zelda-models
-        # Keep the experiment directory containing the global best checkpoint.
-        # Checkpoints live under ray-checkpoints/PPO_Zelda_epoch{N}/
-        all_keys = s3.list_keys("zelda-models", prefix="ray-checkpoints/")
+        # 2. Clean old checkpoint data from zelda-models.
+        # Both Ray and PufferLib store checkpoints under their own prefix:
+        #   ray-checkpoints/PPO_Zelda_epoch{N}/...
+        #   pufferlib-checkpoints/epoch_{N}/model.pt
+        checkpoint_prefixes = ["ray-checkpoints/", "pufferlib-checkpoints/"]
 
-        # Find which experiment dirs exist (e.g. ray-checkpoints/PPO_Zelda_epoch0)
-        experiment_dirs = set()
-        for key in all_keys:
-            parts = key.split("/")
-            if len(parts) >= 2:
-                experiment_dirs.add(parts[0] + "/" + parts[1])
-
-        # Determine which experiment dir holds the global best by checking
-        # if the dir name appears anywhere in the checkpoint path
-        keep_dirs = set()
-        if global_best_checkpoint:
-            for d in experiment_dirs:
-                # Check both "d in checkpoint" and "checkpoint contains d"
-                # The checkpoint path may or may not include bucket prefix
-                dir_name = d.split("/")[-1]  # e.g. "PPO_Zelda_epoch0"
-                if dir_name in global_best_checkpoint or d in global_best_checkpoint:
-                    keep_dirs.add(d)
-                    logger.info("Keeping checkpoint dir %s (matches global best)", d)
-
-        if not keep_dirs and global_best_checkpoint:
-            # Safety: if no match found, keep everything to avoid data loss
-            logger.warning(
-                "Could not match global best checkpoint to any experiment dir. "
-                "Checkpoint: %s, Dirs: %s — skipping checkpoint cleanup",
-                global_best_checkpoint, experiment_dirs,
-            )
-            return
-
-        # Delete all experiment dirs except the ones we need to keep
-        for exp_dir in experiment_dirs:
-            if exp_dir in keep_dirs:
+        for ckpt_prefix in checkpoint_prefixes:
+            all_keys = s3.list_keys("zelda-models", prefix=ckpt_prefix)
+            if not all_keys:
                 continue
-            deleted = s3.delete_all_objects("zelda-models", prefix=exp_dir + "/")
-            if deleted:
-                logger.info("Cleaned %d checkpoint objects from %s", deleted, exp_dir)
+
+            # Find which epoch dirs exist under this prefix
+            epoch_dirs = set()
+            for key in all_keys:
+                parts = key.split("/")
+                if len(parts) >= 2:
+                    epoch_dirs.add(parts[0] + "/" + parts[1])
+
+            # Determine which dir holds the global best checkpoint
+            keep_dirs = set()
+            if global_best_checkpoint:
+                for d in epoch_dirs:
+                    dir_name = d.split("/")[-1]
+                    if dir_name in global_best_checkpoint or d in global_best_checkpoint:
+                        keep_dirs.add(d)
+                        logger.info("Keeping checkpoint dir %s (matches global best)", d)
+
+                # For PufferLib: the global best checkpoint is a local path like
+                # /tmp/pufferlib-checkpoints/checkpoint_epoch_0.pt.  Match on
+                # the epoch number embedded in the filename.
+                if not keep_dirs and ckpt_prefix == "pufferlib-checkpoints/":
+                    import re
+                    m = re.search(r"epoch_(\d+)", global_best_checkpoint)
+                    if m:
+                        best_epoch_dir = f"pufferlib-checkpoints/epoch_{m.group(1)}"
+                        if best_epoch_dir in epoch_dirs:
+                            keep_dirs.add(best_epoch_dir)
+                            logger.info(
+                                "Keeping checkpoint dir %s (epoch match from %s)",
+                                best_epoch_dir, global_best_checkpoint,
+                            )
+
+            if not keep_dirs and global_best_checkpoint and epoch_dirs:
+                logger.info(
+                    "No checkpoint dir match for %s under %s — skipping cleanup",
+                    global_best_checkpoint, ckpt_prefix,
+                )
+                continue
+
+            # Delete all epoch dirs except the ones we need to keep
+            for exp_dir in epoch_dirs:
+                if exp_dir in keep_dirs:
+                    continue
+                deleted = s3.delete_all_objects("zelda-models", prefix=exp_dir + "/")
+                if deleted:
+                    logger.info("Cleaned %d checkpoint objects from %s", deleted, exp_dir)
 
     except Exception as e:
         logger.warning("Post-epoch cleanup failed (non-fatal): %s", e)

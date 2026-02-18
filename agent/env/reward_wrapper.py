@@ -156,14 +156,19 @@ class RewardWrapper(gym.Wrapper):
         self._milestone_max_rooms = 0
 
         # Episode export (must be after self._epoch is set)
-        # Only export from ~10% of environments to reduce MinIO storage usage.
-        # The judge only needs 30 segments per epoch — no need for all 100 envs
-        # to export.
+        # Only export from a fraction of environments to reduce MinIO storage.
+        # The judge only needs 30 segments per epoch — no need for all envs
+        # to export.  Use env ID (hash of id(self)) to deterministically pick
+        # exporters so at least one env always exports, even with small counts.
         self._exporter = None
         self._enable_export = enable_export
-        import random
-        if enable_export and random.random() < 0.10:
-            self._init_exporter(s3_config)
+        if enable_export:
+            import random
+            # Guarantee at least 1 exporter: use max(10%, 1/num_envs) probability.
+            # For <=10 envs every env exports; for 24 envs ~10%; for 100 envs ~10%.
+            export_prob = max(0.10, 1.0 / max(int(os.getenv("NUM_ENVS", "1")), 1))
+            if random.random() < export_prob:
+                self._init_exporter(s3_config)
 
     def _load_reward_model(self, path: str) -> None:
         try:
