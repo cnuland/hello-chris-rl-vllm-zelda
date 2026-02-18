@@ -130,11 +130,46 @@ def print_report(metadata: list[dict], evals: list[dict], segment_counts: dict[i
     latest = metadata[-1]
     print(f"\n--- Training Progress (Epoch {latest.get('epoch', '?')}) ---")
     print(f"  Total timesteps:    {latest.get('timesteps', 0):,}")
-    print(f"  Total episodes:     {latest.get('episodes', 0):,}")
+    print(f"  Episodes completed: {latest.get('episodes_completed', latest.get('episodes', 0)):,}")
     print(f"  Mean reward:        {latest.get('reward_mean', 0):.2f}")
     print(f"  Max reward:         {latest.get('reward_max', 0):.2f}")
     print(f"  Min reward:         {latest.get('reward_min', 'N/A')}")
     print(f"  Entropy coeff:      {latest.get('entropy_coeff', 'N/A')}")
+
+    # Game milestones from metadata
+    ms = latest.get("milestones", {})
+    if ms:
+        n_eps = max(latest.get("episodes_completed", 1), 1)
+        print(f"\n--- Game Milestones (Epoch {latest.get('epoch', '?')}) ---")
+        print(f"  Max rooms explored:   {ms.get('max_rooms', 0)}")
+        print(f"  Max tiles explored:   {ms.get('max_tiles', 0)}")
+        print(f"  Got sword:            {ms.get('total_got_sword', 0)}/{n_eps} episodes")
+        print(f"  Visited Maku Tree:    {ms.get('total_visited_maku_tree', 0)}/{n_eps} episodes")
+        print(f"  Maku Tree dialog:     {ms.get('total_maku_dialog', 0)}/{n_eps} episodes")
+        print(f"  Got Gnarled Key:      {ms.get('total_gnarled_key', 0)}/{n_eps} episodes")
+        print(f"  Entered dungeon:      {ms.get('total_entered_dungeon', 0)}/{n_eps} episodes")
+        print(f"  Max essences:         {ms.get('max_essences', 0)}")
+        print(f"  Max dungeon keys:     {ms.get('max_dungeon_keys', 0)}")
+
+    # Milestone trend across epochs
+    milestone_epochs = [m for m in metadata if m.get("milestones")]
+    if len(milestone_epochs) >= 2:
+        print(f"\n--- Exploration Trend (last 5 epochs) ---")
+        for m in milestone_epochs[-5:]:
+            ep = m.get("epoch", "?")
+            ms_e = m.get("milestones", {})
+            rooms = ms_e.get("max_rooms", 0)
+            tiles = ms_e.get("max_tiles", 0)
+            sword = ms_e.get("total_got_sword", 0)
+            maku = ms_e.get("total_visited_maku_tree", 0)
+            dung = ms_e.get("total_entered_dungeon", 0)
+            room_bar = "#" * min(rooms, 40)
+            flags = []
+            if sword: flags.append("SWORD")
+            if maku: flags.append("MAKU")
+            if dung: flags.append("DUNGEON")
+            flag_str = f"  [{', '.join(flags)}]" if flags else ""
+            print(f"  Epoch {ep:3d}: rooms={rooms:3d} tiles={tiles:4d} {room_bar}{flag_str}")
 
     # Reward trend
     if len(metadata) >= 2:

@@ -140,15 +140,40 @@ def compute_lr(epoch: int, start_epoch: int, max_epochs: int,
 
 
 def clean_minio():
-    """Delete all old episodes and models from MinIO for a fresh start."""
+    """Delete old training data from MinIO for a fresh start.
+
+    Preserves ROM files (roms/) which are expensive to re-upload and
+    required by the entrypoint. Only cleans training artifacts:
+    checkpoints, episodes, scores, evaluations, advice.
+    """
     try:
         from agent.utils.s3 import S3Client
         from agent.utils.config import S3Config
 
         s3 = S3Client(S3Config())
-        for bucket in ["zelda-episodes", "zelda-models"]:
-            logger.info("Resetting bucket %s...", bucket)
-            s3.force_reset_bucket(bucket)
+
+        # zelda-episodes: wipe everything (segments, scores)
+        logger.info("Resetting bucket zelda-episodes...")
+        s3.force_reset_bucket("zelda-episodes")
+
+        # zelda-models: selectively delete training artifacts, keep roms/
+        logger.info("Cleaning training data from zelda-models (preserving roms/)...")
+        s3.ensure_bucket("zelda-models")
+        training_prefixes = [
+            "checkpoints/",
+            "pufferlib-checkpoints/",
+            "ray-checkpoints/",
+            "reward_model/",
+            "evaluations/",
+            "advice/",
+            "pipeline/",
+            "scores/",
+        ]
+        for prefix in training_prefixes:
+            deleted = s3.delete_all_objects("zelda-models", prefix=prefix)
+            if deleted:
+                logger.info("  Deleted %d objects from zelda-models/%s", deleted, prefix)
+
         logger.info("MinIO cleanup complete")
     except Exception as e:
         logger.warning("MinIO cleanup failed: %s", e)

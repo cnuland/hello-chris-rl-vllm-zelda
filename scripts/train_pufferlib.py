@@ -233,6 +233,39 @@ def upload_metadata(epoch: int, metadata: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Info extraction
+# ---------------------------------------------------------------------------
+
+def _extract_env_info(infos, env_idx: int) -> dict:
+    """Safely extract per-env info dict from PufferLib vectorized infos.
+
+    PufferLib may return infos as:
+      - list of dicts: infos[i] is a dict
+      - dict of arrays: infos["key"][i] is a scalar
+      - None / empty
+    """
+    if infos is None:
+        return {}
+    # List of dicts (most common with PufferLib Multiprocessing)
+    if isinstance(infos, (list, tuple)) and len(infos) > env_idx:
+        entry = infos[env_idx]
+        if isinstance(entry, dict):
+            return entry
+        return {}
+    # Dict of arrays / lists
+    if isinstance(infos, dict):
+        result = {}
+        for key, val in infos.items():
+            try:
+                if hasattr(val, "__getitem__") and len(val) > env_idx:
+                    result[key] = val[env_idx]
+            except (TypeError, IndexError):
+                pass
+        return result
+    return {}
+
+
+# ---------------------------------------------------------------------------
 # PPO Training
 # ---------------------------------------------------------------------------
 
@@ -351,6 +384,22 @@ def run_training_epoch(
     completed_rewards = []
     completed_lengths = []
 
+    # Game milestone tracking — aggregated across all completed episodes.
+    # "any_*" tracks whether ANY episode achieved a milestone (binary).
+    # "max_*" tracks the best value seen across all episodes.
+    # "total_*" counts how many episodes achieved a milestone.
+    milestones = {
+        "total_got_sword": 0,
+        "total_entered_dungeon": 0,
+        "total_visited_maku_tree": 0,
+        "total_maku_dialog": 0,
+        "total_gnarled_key": 0,
+        "max_rooms": 0,
+        "max_tiles": 0,
+        "max_essences": 0,
+        "max_dungeon_keys": 0,
+    }
+
     global_step = 0
     start_time = time.time()
     log_interval = max(1, num_iterations // 20)
@@ -385,7 +434,7 @@ def run_training_epoch(
             rewards_buf[step] = torch.tensor(reward_np, device=device)
             done = torch.tensor(done_np, dtype=torch.float32, device=device)
 
-            # Track episode stats
+            # Track episode stats and game milestones
             ep_rewards += reward_np
             ep_lengths += 1
             for i in range(num_envs):
@@ -394,6 +443,37 @@ def run_training_epoch(
                     completed_lengths.append(int(ep_lengths[i]))
                     ep_rewards[i] = 0.0
                     ep_lengths[i] = 0
+
+                    # Extract game milestones from env info.
+                    # PufferLib returns infos as list-of-dicts or dict-of-arrays.
+                    env_info = _extract_env_info(infos, i)
+                    if env_info:
+                        if env_info.get("milestone_got_sword", 0) > 0:
+                            milestones["total_got_sword"] += 1
+                        if env_info.get("milestone_entered_dungeon", 0) > 0:
+                            milestones["total_entered_dungeon"] += 1
+                        if env_info.get("milestone_visited_maku_tree", 0) > 0:
+                            milestones["total_visited_maku_tree"] += 1
+                        if env_info.get("milestone_maku_dialog", 0) > 0:
+                            milestones["total_maku_dialog"] += 1
+                        if env_info.get("milestone_gnarled_key", 0) > 0:
+                            milestones["total_gnarled_key"] += 1
+                        milestones["max_rooms"] = max(
+                            milestones["max_rooms"],
+                            int(env_info.get("milestone_max_rooms", 0)),
+                        )
+                        milestones["max_tiles"] = max(
+                            milestones["max_tiles"],
+                            int(env_info.get("unique_tiles", 0)),
+                        )
+                        milestones["max_essences"] = max(
+                            milestones["max_essences"],
+                            int(env_info.get("milestone_essences", 0)),
+                        )
+                        milestones["max_dungeon_keys"] = max(
+                            milestones["max_dungeon_keys"],
+                            int(env_info.get("milestone_dungeon_keys", 0)),
+                        )
 
             obs = torch.tensor(np.asarray(next_obs_np), dtype=torch.float32, device=device)
             global_step += num_envs
@@ -488,7 +568,7 @@ def run_training_epoch(
             logger.info(
                 "Epoch %d | Iter %d/%d | Steps: %s/%s | SPS: %.0f | "
                 "Reward: %.1f | EpLen: %.0f | PgLoss: %.4f | VLoss: %.4f | "
-                "Entropy: %.3f | KL: %.4f",
+                "Entropy: %.3f | KL: %.4f | Rooms: %d | Tiles: %d",
                 epoch, iteration, num_iterations,
                 f"{global_step:,}", f"{epoch_steps:,}", sps,
                 np.mean(recent_rewards), np.mean(recent_lengths),
@@ -496,6 +576,8 @@ def run_training_epoch(
                 total_v_loss / max(num_updates, 1),
                 total_entropy / max(num_updates, 1),
                 total_approx_kl / max(num_updates, 1),
+                milestones["max_rooms"],
+                milestones["max_tiles"],
             )
 
     # ---- Epoch summary ----
@@ -516,7 +598,7 @@ def run_training_epoch(
     )
     upload_checkpoint_to_minio(ckpt_path, epoch)
 
-    # Build metadata
+    # Build metadata (includes game milestones for monitoring)
     metadata = {
         "epoch": epoch,
         "checkpoint": ckpt_path,
@@ -531,6 +613,8 @@ def run_training_epoch(
         "num_envs": num_envs,
         "episodes_completed": len(completed_rewards),
         "best_mean": avg_reward,
+        # Game progression milestones
+        "milestones": milestones,
     }
 
     metadata_path = os.path.join("/tmp", f"epoch_{epoch}_metadata.json")
@@ -541,6 +625,19 @@ def run_training_epoch(
     logger.info("  Mean reward: %.2f", avg_reward)
     logger.info("  Mean episode length: %.0f", avg_length)
     logger.info("  Total steps: %s", f"{global_step:,}")
+
+    # Game progression summary
+    n_eps = max(len(completed_rewards), 1)
+    logger.info("  --- Game Progress ---")
+    logger.info("  Max rooms explored:   %d", milestones["max_rooms"])
+    logger.info("  Max tiles explored:   %d", milestones["max_tiles"])
+    logger.info("  Got sword:            %d/%d episodes", milestones["total_got_sword"], n_eps)
+    logger.info("  Visited Maku Tree:    %d/%d episodes", milestones["total_visited_maku_tree"], n_eps)
+    logger.info("  Maku Tree dialog:     %d/%d episodes", milestones["total_maku_dialog"], n_eps)
+    logger.info("  Got Gnarled Key:      %d/%d episodes", milestones["total_gnarled_key"], n_eps)
+    logger.info("  Entered dungeon:      %d/%d episodes", milestones["total_entered_dungeon"], n_eps)
+    logger.info("  Max essences:         %d", milestones["max_essences"])
+    logger.info("  Max dungeon keys:     %d", milestones["max_dungeon_keys"])
 
     # Cleanup
     vecenv.close()

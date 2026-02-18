@@ -1,0 +1,104 @@
+# Baseline test: PufferLib PPO with single save, milestone tracking.
+# CPU-only, 12 envs, 500k steps/epoch, 6 epochs, god mode throughout.
+# Purpose: validate PufferLib learns on Zelda before adding complexity.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: zelda-pufferlib-baseline
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: rl-training
+    zelda-rl/phase: training
+    zelda-rl/run: baseline-v1
+spec:
+  backoffLimit: 2
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: zelda-rl
+        app.kubernetes.io/component: rl-training
+        zelda-rl/run: baseline-v1
+    spec:
+      serviceAccountName: zelda-rl-training
+      restartPolicy: OnFailure
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: pufferlib-trainer
+        image: quay.io/cnuland/zelda-pufferlib-trainer:latest
+        imagePullPolicy: Always
+        resources:
+          requests:
+            cpu: "12"
+            memory: 24Gi
+          limits:
+            cpu: "24"
+            memory: 48Gi
+        env:
+        # Training loop
+        - name: EPOCH
+          value: "0"
+        - name: MAX_EPOCHS
+          value: "6"
+        - name: EPOCH_STEPS
+          value: "500000"
+        - name: NUM_ENVS
+          value: "12"
+        - name: NUM_WORKERS
+          value: "4"
+        - name: EPISODE_LENGTH
+          value: "10000"
+        - name: MINIBATCH_SIZE
+          value: "1024"
+        - name: USE_LSTM
+          value: "false"
+        # Scheduling — keep exploration pressure high
+        - name: ENTROPY_START
+          value: "0.05"
+        - name: ENTROPY_END
+          value: "0.03"
+        - name: LR_START
+          value: "3e-4"
+        - name: LR_END
+          value: "1e-5"
+        - name: GOD_MODE_EPOCHS
+          value: "6"
+        # Evaluation — skip LLM judges for baseline, just measure exploration
+        - name: RUN_EVAL
+          value: "false"
+        - name: CLEAN_START
+          value: "true"
+        - name: REWARD_MODEL_PATH
+          value: ""
+        - name: SAVE_STATE_PATH
+          value: "/home/trainer/roms/zelda.gbc.sword.state"
+        - name: SAVE_STATE_S3_KEY
+          value: "roms/zelda.gbc.sword.state"
+        - name: WALKTHROUGH_PATH
+          value: "data/zelda_oos_walkthrough.txt"
+        # Paths
+        - name: ROM_PATH
+          value: "/home/trainer/roms/zelda.gbc"
+        - name: PYTHONPATH
+          value: "/home/trainer"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: CHECKPOINT_DIR
+          value: "/tmp/pufferlib-checkpoints"
+        # MinIO
+        - name: S3_ENDPOINT_URL
+          value: http://minio-api.zelda-rl.svc.cluster.local:9000
+        - name: S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: access-key
+        - name: S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: secret-key
