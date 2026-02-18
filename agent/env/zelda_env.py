@@ -271,7 +271,11 @@ class ZeldaEnv(gym.Env):
 
     @property
     def is_transitioning(self) -> bool:
-        return self._read(_SCREEN_TRANSITION) != 0 or self._read(_LOADING) != 0
+        # wScrollMode bit 7 is set during active screen scroll.
+        # Values 0x01 (normal) and 0x02 (dungeon) are NOT transitions.
+        # Values 0x81, 0x82, etc. indicate active scrolling.
+        scroll = self._read(_SCREEN_TRANSITION)
+        return (scroll & 0x80) != 0 or self._read(_LOADING) != 0
 
     # ------------------------------------------------------------------
     # OAM sprite presence
