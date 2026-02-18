@@ -22,6 +22,7 @@ spec:
         zelda-rl/run: baseline-v1
     spec:
       serviceAccountName: zelda-rl-training
+      runtimeClassName: nvidia
       restartPolicy: OnFailure
       tolerations:
       - key: nvidia.com/gpu
