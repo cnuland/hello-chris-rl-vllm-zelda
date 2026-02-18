@@ -48,7 +48,7 @@ spec:
         - name: MAX_EPOCHS
           value: "6"
         - name: EPOCH_STEPS
-          value: "500000"
+          value: "2000000"
         - name: NUM_ENVS
           value: "48"
         - name: NUM_WORKERS
