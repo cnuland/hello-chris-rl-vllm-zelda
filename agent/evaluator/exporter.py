@@ -28,6 +28,9 @@ def _sanitize(obj):
         return {k: _sanitize(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_sanitize(v) for v in obj]
+    # numpy array → list of native Python values
+    if hasattr(obj, "tolist"):
+        return obj.tolist()
     if hasattr(obj, "item"):  # numpy scalar
         return obj.item()
     return obj
@@ -163,7 +166,7 @@ class EpisodeExporter:
         for f in seg.frames:
             lines.append(
                 json.dumps(
-                    {"step": int(f.step), "action": int(f.action), "reward": float(f.reward), "state": _sanitize(f.state)}
+                    {"step": int(f.step), "action": _sanitize(f.action), "reward": float(f.reward), "state": _sanitize(f.state)}
                 )
             )
         self._s3.upload_bytes(
