@@ -722,7 +722,14 @@ def main():
     # Global best tracking -- prevents cascading regressions
     global_best_checkpoint = ""
     global_best_mean = -float("inf")
-    reward_config = None
+
+    # Initial reward config from env vars (overridden later by reward advisor)
+    reward_config: dict | None = None
+    time_penalty = float(os.getenv("TIME_PENALTY", "0"))
+    if time_penalty != 0:
+        reward_config = {"time_penalty": time_penalty}
+        logger.info("Time penalty: %.4f per step", time_penalty)
+
     rm_path = os.getenv("REWARD_MODEL_PATH", "")
 
     # Check for existing checkpoint from MinIO

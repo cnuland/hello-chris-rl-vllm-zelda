@@ -61,9 +61,9 @@ spec:
           value: "false"
         # Scheduling — lower entropy to let policy specialize
         - name: ENTROPY_START
-          value: "0.01"
+          value: "0.005"
         - name: ENTROPY_END
-          value: "0.002"
+          value: "0.001"
         - name: LR_START
           value: "3e-4"
         - name: LR_END
@@ -72,6 +72,10 @@ spec:
           value: "6"
         - name: STAGNATION_LIMIT
           value: "5000"
+        - name: NUM_STEPS
+          value: "256"
+        - name: TIME_PENALTY
+          value: "-0.001"
         # Evaluation — skip LLM judges for baseline, just measure exploration
         - name: RUN_EVAL
           value: "false"
