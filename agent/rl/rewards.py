@@ -75,11 +75,15 @@ class CoverageReward:
 
 
 class RNDCuriosity:
-    """Random Network Distillation curiosity bonus.
+    """Random Network Distillation curiosity bonus (pure numpy).
 
     Maintains a fixed random target network and a trainable predictor.
     Curiosity = MSE between predictor and target outputs.
     Clamped to <= 30% of extrinsic reward magnitude.
+
+    Pure numpy implementation — no PyTorch dependency.  This is critical
+    because PufferLib forks worker processes and PyTorch's autograd engine
+    is fundamentally incompatible with fork-based multiprocessing.
 
     Includes running observation normalization for stable RND predictions.
     """
@@ -95,42 +99,71 @@ class RNDCuriosity:
         self.obs_dim = obs_dim
         self.embed_dim = embed_dim
         self._lr = learning_rate
-        self._initialized = False
-
-        # Lazy init to avoid torch import at module level
-        self._target_net = None
-        self._predictor_net = None
-        self._optimizer = None
 
         # Running observation normalization
         self._obs_mean = np.zeros(obs_dim, dtype=np.float64)
         self._obs_var = np.ones(obs_dim, dtype=np.float64)
         self._obs_count = 0
 
-    def _lazy_init(self) -> None:
-        if self._initialized:
-            return
-        import torch
-        import torch.nn as nn
+        # Kaiming uniform initialization (matches PyTorch nn.Linear default)
+        def _kaiming(out_dim: int, in_dim: int) -> np.ndarray:
+            bound = 1.0 / np.sqrt(in_dim)
+            return np.random.uniform(-bound, bound, (out_dim, in_dim)).astype(np.float32)
 
-        # Force CPU: RND runs inside PufferLib worker processes which
-        # are forked and cannot access the parent's CUDA context.
-        self._target_net = nn.Sequential(
-            nn.Linear(self.obs_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, self.embed_dim),
-        ).cpu()
-        for p in self._target_net.parameters():
-            p.requires_grad = False
+        # Target network (fixed): obs_dim -> 128 -> embed_dim
+        self._t_w1 = _kaiming(128, obs_dim)
+        self._t_b1 = np.zeros(128, dtype=np.float32)
+        self._t_w2 = _kaiming(embed_dim, 128)
+        self._t_b2 = np.zeros(embed_dim, dtype=np.float32)
 
-        self._predictor_net = nn.Sequential(
-            nn.Linear(self.obs_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, self.embed_dim),
-        ).cpu()
-        self._initialized = True
+        # Predictor network (trainable): obs_dim -> 128 -> 128 -> embed_dim
+        self._p_w1 = _kaiming(128, obs_dim)
+        self._p_b1 = np.zeros(128, dtype=np.float32)
+        self._p_w2 = _kaiming(128, 128)
+        self._p_b2 = np.zeros(128, dtype=np.float32)
+        self._p_w3 = _kaiming(embed_dim, 128)
+        self._p_b3 = np.zeros(embed_dim, dtype=np.float32)
+
+    @staticmethod
+    def _relu(x: np.ndarray) -> np.ndarray:
+        return np.maximum(x, 0)
+
+    def _target_forward(self, x: np.ndarray) -> np.ndarray:
+        h = self._relu(self._t_w1 @ x + self._t_b1)
+        return self._t_w2 @ h + self._t_b2
+
+    def _predictor_forward(self, x: np.ndarray) -> tuple:
+        """Forward pass returning output and intermediates for backprop."""
+        h1 = self._p_w1 @ x + self._p_b1
+        a1 = self._relu(h1)
+        h2 = self._p_w2 @ a1 + self._p_b2
+        a2 = self._relu(h2)
+        out = self._p_w3 @ a2 + self._p_b3
+        return out, (x, h1, a1, h2, a2)
+
+    def _predictor_backward(self, d_out: np.ndarray, cache: tuple) -> None:
+        """Manual backprop + SGD update for the predictor."""
+        x, h1, a1, h2, a2 = cache
+
+        # Layer 3: out = W3 @ a2 + b3
+        self._p_w3 -= self._lr * np.outer(d_out, a2)
+        self._p_b3 -= self._lr * d_out
+        d_a2 = self._p_w3.T @ d_out
+
+        # ReLU 2
+        d_h2 = d_a2 * (h2 > 0).astype(np.float32)
+
+        # Layer 2: h2 = W2 @ a1 + b2
+        self._p_w2 -= self._lr * np.outer(d_h2, a1)
+        self._p_b2 -= self._lr * d_h2
+        d_a1 = self._p_w2.T @ d_h2
+
+        # ReLU 1
+        d_h1 = d_a1 * (h1 > 0).astype(np.float32)
+
+        # Layer 1: h1 = W1 @ x + b1
+        self._p_w1 -= self._lr * np.outer(d_h1, x)
+        self._p_b1 -= self._lr * d_h1
 
     def _normalize_obs(self, obs: np.ndarray) -> np.ndarray:
         """Running normalization for stable RND predictions."""
@@ -144,29 +177,27 @@ class RNDCuriosity:
 
     def compute(self, obs: np.ndarray, extrinsic_reward: float) -> float:
         """Compute clamped curiosity bonus and update predictor."""
-        self._lazy_init()
-        import torch
-
         normed = self._normalize_obs(obs.astype(np.float64)).astype(np.float32)
-        obs_t = torch.from_numpy(normed).float().unsqueeze(0)
-        with torch.no_grad():
-            target = self._target_net(obs_t)
-        pred = self._predictor_net(obs_t)
-        mse = ((pred - target) ** 2).mean()
+        # Clip to prevent overflow in matmul
+        normed = np.clip(normed, -5.0, 5.0)
 
-        # Train predictor — manual SGD to avoid torch.optim CUDA checks
-        # that crash in forked PufferLib worker processes (PyTorch 2.x).
-        mse.backward()
-        with torch.no_grad():
-            for p in self._predictor_net.parameters():
-                if p.grad is not None:
-                    p -= self._lr * p.grad
-                    p.grad.zero_()
+        target = self._target_forward(normed)
+        pred, cache = self._predictor_forward(normed)
 
-        curiosity = mse.item()
+        diff = pred - target
+        mse = float(np.mean(diff ** 2))
+
+        # NaN guard — skip update if numerics broke
+        if not np.isfinite(mse):
+            return 0.0
+
+        # Backprop: d_loss/d_pred = 2 * diff / N
+        d_out = (2.0 * diff / len(diff)).astype(np.float32)
+        self._predictor_backward(d_out, cache)
+
         # Clamp to max_ratio of extrinsic
         cap = abs(extrinsic_reward) * self.max_ratio
-        return min(curiosity, cap) if cap > 0 else min(curiosity, 0.1)
+        return min(mse, cap) if cap > 0 else min(mse, 0.1)
 
 
 @dataclass
