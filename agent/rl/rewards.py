@@ -130,7 +130,6 @@ class RNDCuriosity:
             nn.ReLU(),
             nn.Linear(128, self.embed_dim),
         ).cpu()
-        self._optimizer = torch.optim.Adam(self._predictor_net.parameters(), lr=self._lr)
         self._initialized = True
 
     def _normalize_obs(self, obs: np.ndarray) -> np.ndarray:
@@ -155,10 +154,14 @@ class RNDCuriosity:
         pred = self._predictor_net(obs_t)
         mse = ((pred - target) ** 2).mean()
 
-        # Train predictor
-        self._optimizer.zero_grad()
+        # Train predictor — manual SGD to avoid torch.optim CUDA checks
+        # that crash in forked PufferLib worker processes (PyTorch 2.x).
         mse.backward()
-        self._optimizer.step()
+        with torch.no_grad():
+            for p in self._predictor_net.parameters():
+                if p.grad is not None:
+                    p -= self._lr * p.grad
+                    p.grad.zero_()
 
         curiosity = mse.item()
         # Clamp to max_ratio of extrinsic
