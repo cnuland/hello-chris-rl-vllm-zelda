@@ -113,11 +113,13 @@ class RNDCuriosity:
         import torch
         import torch.nn as nn
 
+        # Force CPU: RND runs inside PufferLib worker processes which
+        # are forked and cannot access the parent's CUDA context.
         self._target_net = nn.Sequential(
             nn.Linear(self.obs_dim, 128),
             nn.ReLU(),
             nn.Linear(128, self.embed_dim),
-        )
+        ).cpu()
         for p in self._target_net.parameters():
             p.requires_grad = False
 
@@ -127,7 +129,7 @@ class RNDCuriosity:
             nn.Linear(128, 128),
             nn.ReLU(),
             nn.Linear(128, self.embed_dim),
-        )
+        ).cpu()
         self._optimizer = torch.optim.Adam(self._predictor_net.parameters(), lr=self._lr)
         self._initialized = True
 
