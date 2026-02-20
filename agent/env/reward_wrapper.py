@@ -113,6 +113,21 @@ class RewardWrapper(gym.Wrapper):
 
         # Exit-seeking shaping — continuous reward for moving toward FRONTIER exits
         self._exit_seeking_scale = cfg.get("exit_seeking", 0.5)
+
+        # Distance bonus — reward for moving far from the starting position.
+        # Critical for multi-room exploration: without this, the agent has no
+        # incentive to push through rooms.  Uses Manhattan distance in the
+        # 16×16 room grid (row, col) from the starting room.
+        self._distance_bonus = cfg.get("distance_bonus", 5.0)
+        self._start_room_id = -1
+        self._max_distance_achieved = 0
+
+        # Directional bonus — reward for moving east/south toward the Maku Tree
+        # area.  Uses distance-based decay (0.999^(dist*500)) so the bonus stays
+        # strong until the agent actually reaches the target area.
+        self._directional_bonus = cfg.get("directional_bonus", 10.0)
+        self._directional_decay = cfg.get("directional_decay", 0.999)
+        self._max_directional_progress = 0
         self._prev_exit_dist = 0
 
         # Area-based exploration boost — multiplies coverage reward by
@@ -298,6 +313,11 @@ class RewardWrapper(gym.Wrapper):
         self._prev_dialog_active = False
         self._prev_pixel_x = info.get("pixel_x", 0)
         self._prev_pixel_y = info.get("pixel_y", 0)
+
+        # Distance/directional bonus tracking
+        self._start_room_id = info.get("room_id", 0)
+        self._max_distance_achieved = 0
+        self._max_directional_progress = 0
 
         # Reset milestones for new episode — record what the save state
         # already has so milestone reporting only counts NEW achievements.
@@ -587,6 +607,34 @@ class RewardWrapper(gym.Wrapper):
             if self._rnd is not None:
                 curiosity = self._rnd.compute(obs, reward)
                 reward += curiosity
+
+        # --- Distance and directional exploration bonuses ---
+        # Only on overworld (group 0) where room_id maps to a 16×16 grid.
+        # These bonuses were critical in the RLLib approach that achieved 13
+        # rooms: they provide strong one-time rewards for reaching new territory,
+        # creating a reward gradient across the entire map.
+        if active_group == 0 and not is_transitioning:
+            room_id = info.get("room_id", 0)
+            start_row = self._start_room_id // 16
+            start_col = self._start_room_id % 16
+            cur_row = room_id // 16
+            cur_col = room_id % 16
+
+            # Distance bonus — one-time reward per new max Manhattan distance
+            # from starting room.  Encourages spreading outward in all directions.
+            manhattan = abs(cur_row - start_row) + abs(cur_col - start_col)
+            if manhattan > self._max_distance_achieved:
+                delta = manhattan - self._max_distance_achieved
+                reward += delta * self._distance_bonus
+                self._max_distance_achieved = manhattan
+
+            # Directional bonus — one-time reward per new eastward column.
+            # Maku Tree (primary quest objective) is east of the starting area.
+            east_progress = cur_col - start_col
+            if east_progress > self._max_directional_progress:
+                delta = east_progress - self._max_directional_progress
+                reward += delta * self._directional_bonus
+                self._max_directional_progress = east_progress
 
         # --- Potential-based shaping ---
         if self._shaping is not None and self._reward_model is not None:

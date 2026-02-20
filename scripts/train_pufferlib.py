@@ -732,14 +732,23 @@ def main():
     reward_config: dict | None = None
     time_penalty = float(os.getenv("TIME_PENALTY", "0"))
     backtrack_penalty = float(os.getenv("BACKTRACK_PENALTY", "0"))
-    if time_penalty != 0 or backtrack_penalty != 0:
-        reward_config = {}
-        if time_penalty != 0:
-            reward_config["time_penalty"] = time_penalty
-            logger.info("Time penalty: %.4f per step", time_penalty)
-        if backtrack_penalty != 0:
-            reward_config["backtrack_penalty"] = backtrack_penalty
-            logger.info("Backtrack penalty: %.2f per room re-entry", backtrack_penalty)
+    distance_bonus = float(os.getenv("DISTANCE_BONUS", "0"))
+    directional_bonus = float(os.getenv("DIRECTIONAL_BONUS", "0"))
+    reward_overrides = {}
+    if time_penalty != 0:
+        reward_overrides["time_penalty"] = time_penalty
+        logger.info("Time penalty: %.4f per step", time_penalty)
+    if backtrack_penalty != 0:
+        reward_overrides["backtrack_penalty"] = backtrack_penalty
+        logger.info("Backtrack penalty: %.2f per room re-entry", backtrack_penalty)
+    if distance_bonus != 0:
+        reward_overrides["distance_bonus"] = distance_bonus
+        logger.info("Distance bonus: %.1f per new max Manhattan distance", distance_bonus)
+    if directional_bonus != 0:
+        reward_overrides["directional_bonus"] = directional_bonus
+        logger.info("Directional bonus: %.1f per new eastward column", directional_bonus)
+    if reward_overrides:
+        reward_config = reward_overrides
 
     rm_path = os.getenv("REWARD_MODEL_PATH", "")
 
