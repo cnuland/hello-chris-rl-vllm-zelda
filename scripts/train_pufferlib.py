@@ -726,9 +726,15 @@ def main():
     # Initial reward config from env vars (overridden later by reward advisor)
     reward_config: dict | None = None
     time_penalty = float(os.getenv("TIME_PENALTY", "0"))
-    if time_penalty != 0:
-        reward_config = {"time_penalty": time_penalty}
-        logger.info("Time penalty: %.4f per step", time_penalty)
+    backtrack_penalty = float(os.getenv("BACKTRACK_PENALTY", "0"))
+    if time_penalty != 0 or backtrack_penalty != 0:
+        reward_config = {}
+        if time_penalty != 0:
+            reward_config["time_penalty"] = time_penalty
+            logger.info("Time penalty: %.4f per step", time_penalty)
+        if backtrack_penalty != 0:
+            reward_config["backtrack_penalty"] = backtrack_penalty
+            logger.info("Backtrack penalty: %.2f per room re-entry", backtrack_penalty)
 
     rm_path = os.getenv("REWARD_MODEL_PATH", "")
 

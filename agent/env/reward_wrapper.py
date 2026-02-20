@@ -129,9 +129,13 @@ class RewardWrapper(gym.Wrapper):
             5: cfg.get("area_boost_dungeon", 2.0),
         }
 
-        # Backtrack penalty — discourage re-entering recently visited rooms
+        # Backtrack penalty — discourage re-entering recently visited rooms.
+        # Default 0.0: disabled because -0.3 made room transitions net-negative,
+        # causing the policy to converge on "never leave the current room."
+        # Coverage's 1/sqrt(N) diminishing returns already naturally discourages
+        # revisiting the same tiles without penalizing necessary backtracking.
         self._recent_rooms: deque[int] = deque(maxlen=5)
-        self._backtrack_penalty = cfg.get("backtrack_penalty", -0.3)
+        self._backtrack_penalty = cfg.get("backtrack_penalty", 0.0)
         self._prev_room_id = -1
 
         # Sub-reward modules
@@ -551,10 +555,13 @@ class RewardWrapper(gym.Wrapper):
                 self._recent_rooms.append(room_id)
             self._prev_room_id = room_id
 
-            # Exit-seeking shaping: reward moving toward FRONTIER (unvisited) exits
+            # Exit-seeking shaping: reward moving toward FRONTIER (unvisited) exits.
+            # Delta is clamped to [-2, +2] to prevent large reward spikes when
+            # frontier_exit_dist jumps (e.g., entering a new room where the
+            # nearest frontier exit is suddenly much closer or farther).
             visited = self._coverage._visited_rooms
             cur_exit_dist = self.env.frontier_exit_dist(visited)
-            exit_delta = self._prev_exit_dist - cur_exit_dist
+            exit_delta = max(min(self._prev_exit_dist - cur_exit_dist, 2.0), -2.0)
             if exit_delta != 0:
                 reward += exit_delta * self._exit_seeking_scale
             self._prev_exit_dist = cur_exit_dist
