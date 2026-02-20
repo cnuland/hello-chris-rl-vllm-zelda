@@ -18,6 +18,8 @@ spec:
         app.kubernetes.io/component: visualization
         app.kubernetes.io/name: zelda-map-viz
     spec:
+      imagePullSecrets:
+      - name: quay-viz-pull
       containers:
       - name: map-viz
         image: quay.io/cnuland/zelda-map-viz:latest

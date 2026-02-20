@@ -1,0 +1,32 @@
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: zelda-map-viz
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: visualization
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/cnuland/hello-chris-rl-vllm-zelda.git
+      ref: main
+    contextDir: visualization
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Containerfile
+  output:
+    to:
+      kind: DockerImage
+      name: quay.io/cnuland/zelda-map-viz:latest
+    pushSecret:
+      name: quay-viz-push
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  runPolicy: Serial

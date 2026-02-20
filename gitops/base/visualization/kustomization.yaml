@@ -3,6 +3,7 @@ kind: Kustomization
 namespace: zelda-rl
 
 resources:
+- buildconfig.yaml
 - deployment.yaml
 - service.yaml
 - route.yaml
