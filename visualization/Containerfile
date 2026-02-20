@@ -1,0 +1,37 @@
+# Combined visualization image: WebSocket relay + PixiJS web viewer
+# Serves the overworld map viewer and relays position telemetry
+# from RL training pods to browser clients.
+#
+# Build context must be the visualization/ directory:
+#   podman build -t quay.io/cnuland/zelda-map-viz:latest -f visualization/Containerfile visualization/
+
+# ── Stage 1: Build PixiJS web frontend ──────────────────────────
+FROM node:20-alpine AS web-builder
+WORKDIR /build
+COPY web/package.json web/package-lock.json* ./
+RUN npm install
+COPY web/ .
+# Use the VRAM-rendered overworld map
+COPY assets/overworld.png assets/overworld.png
+RUN npm run build
+
+# ── Stage 2: Production server ──────────────────────────────────
+FROM node:20-alpine
+WORKDIR /app
+
+# OpenShift runs containers with arbitrary UIDs in GID 0
+RUN chown -R 1001:0 /app && chmod -R g=u /app
+
+COPY ws-server/package.json .
+RUN npm install --production && npm cache clean --force
+
+COPY ws-server/index.js .
+COPY --from=web-builder /build/dist ./public
+
+# Fix permissions for the copied files
+RUN chown -R 1001:0 /app && chmod -R g=u /app
+
+USER 1001
+EXPOSE 3344
+
+CMD ["node", "index.js"]

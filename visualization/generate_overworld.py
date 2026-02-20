@@ -90,26 +90,6 @@ GRID_COLS = 16
 GRID_ROWS = 16
 TOTAL_ROOMS = GRID_COLS * GRID_ROWS  # 256
 
-# Game state (additional)
-CUTSCENE_INDEX = 0xC2EF       # wCutsceneIndex
-
-# GBC hardware registers (LCD, scroll, palettes)
-LCDC_REG = 0xFF40             # LCD Control register (bit 7 = LCD on)
-SCY_REG = 0xFF42              # BG scroll Y
-SCX_REG = 0xFF43              # BG scroll X
-BGPI = 0xFF68                 # BG palette index (bit 7 = auto-increment)
-BGPD = 0xFF69                 # BG palette data
-OBPI = 0xFF6A                 # OBJ palette index (bit 7 = auto-increment)
-OBPD = 0xFF6B                 # OBJ palette data
-
-# Game's software mirrors of LCDC — VBlank handler copies these to hardware
-GFX_REGS1 = 0xC485            # wGfxRegs1
-GFX_REGS_FINAL = 0xC497       # wGfxRegsFinal
-
-# Aliases for readability in palette helper functions
-WRAM_BANK_REG = SVBK_REG      # WRAM bank select (same as SVBK_REG)
-PAL_BG_BUFFER = WRAM_TILESET_PALETTES  # BG palette buffer in WRAM bank 2
-
 # Season constants
 SEASONS = {0: "spring", 1: "summer", 2: "autumn", 3: "winter"}
 
@@ -413,6 +393,16 @@ def warp_to_room(pyboy, save_state_bytes: bytes, room_id: int,
         pyboy.tick()
         if pyboy.memory[ACTIVE_ROOM] == room_id:
             room_changed = True
+            # Clear warp state immediately — applyWarpDest has already
+            # consumed these values.  If we leave WARP_DEST_GROUP=0x80,
+            # the game detects a "pending warp" during the extra ticks
+            # and re-triggers it, overwriting correct VRAM tile data.
+            pyboy.memory[WARP_DEST_GROUP] = 0xFF
+            pyboy.memory[WARP_DEST_ROOM] = 0x00
+            pyboy.memory[WARP_TRANSITION] = 0x00
+            pyboy.memory[WARP_TRANSITION2] = 0x00
+            pyboy.memory[KEYS_PRESSED] = 0x00
+            pyboy.memory[KEYS_JUST_PRESSED] = 0x00
             # Extra frames for generateVramTilesWithRoomChanges to finish
             for _ in range(60):
                 pyboy.tick()

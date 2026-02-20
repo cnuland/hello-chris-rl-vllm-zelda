@@ -10,6 +10,7 @@ resources:
 - rl-training
 - evaluator
 - builds
+- visualization
 
 labels:
 - pairs:

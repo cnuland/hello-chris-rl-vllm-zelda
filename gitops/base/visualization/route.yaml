@@ -1,0 +1,18 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: zelda-map-viz
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: visualization
+    app.kubernetes.io/name: zelda-map-viz
+spec:
+  to:
+    kind: Service
+    name: zelda-map-viz
+    weight: 100
+  port:
+    targetPort: http-ws
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

@@ -19,6 +19,7 @@
  * License: MIT
  */
 
+const path = require("path");
 const express = require("express");
 const expressWs = require("express-ws");
 
@@ -26,6 +27,9 @@ const app = express();
 expressWs(app);
 
 const PORT = process.env.PORT || 3344;
+
+// Serve the built PixiJS web app from ./public
+app.use(express.static(path.join(__dirname, "public")));
 const REPLAY_BUFFER_SIZE = 16;
 
 // Replay buffer: stores last N messages so late-joining viewers

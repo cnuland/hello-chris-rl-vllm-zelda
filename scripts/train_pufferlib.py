@@ -87,6 +87,7 @@ def make_env(
     reward_model_path: str = "",
     enable_export: bool = True,
     stagnation_limit: int = 5000,
+    vis_ws_url: str = "",
     buf=None,
     seed=None,
 ):
@@ -95,6 +96,9 @@ def make_env(
     Used as the factory function for pufferlib.vector.make().
     PufferLib 3.0 passes ``buf`` and ``seed`` to the factory when
     creating environments inside worker processes.
+
+    If ``vis_ws_url`` is set, wraps the environment with StreamWrapper
+    to broadcast position telemetry to the map visualization server.
     """
     from agent.env.reward_wrapper import RewardWrapper
     from agent.env.zelda_env import ZeldaEnv
@@ -118,8 +122,24 @@ def make_env(
         epoch=epoch,
         stagnation_limit=stagnation_limit,
     )
+
+    env = wrapped
+
+    # Optionally stream position telemetry to the map visualization server
+    if vis_ws_url:
+        from visualization.stream_wrapper import StreamWrapper
+        env_id = seed if seed is not None else 0
+        # Generate a unique color per env from its ID
+        hue = (env_id * 137) % 360  # golden-angle spacing
+        color = f"hsl({hue}, 70%, 55%)"
+        env = StreamWrapper(
+            env,
+            ws_address=vis_ws_url,
+            stream_metadata={"user": "pufferlib", "env_id": env_id, "color": color},
+        )
+
     return pufferlib.emulation.GymnasiumPufferEnv(
-        wrapped, buf=buf, seed=seed if seed is not None else 0,
+        env, buf=buf, seed=seed if seed is not None else 0,
     )
 
 
@@ -328,6 +348,7 @@ def run_training_epoch(
         reward_model_path=rm_path,
         enable_export=True,
         stagnation_limit=int(os.getenv("STAGNATION_LIMIT", "5000")),
+        vis_ws_url=os.getenv("VIS_WS_URL", ""),
     )
 
     vecenv = pufferlib.vector.make(

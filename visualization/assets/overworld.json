@@ -12,8 +12,8 @@
   "tiles_per_room_x": 10,
   "tiles_per_room_y": 8,
   "tile_size_px": 16,
-  "success_count": 256,
-  "fail_count": 0,
+  "success_count": 255,
+  "fail_count": 1,
   "elapsed_seconds": 5.9,
   "rooms": {
     "0": {
@@ -1102,7 +1102,7 @@
       "col": 8
     },
     "217": {
-      "status": "ok",
+      "status": "failed",
       "row": 13,
       "col": 9
     },

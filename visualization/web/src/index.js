@@ -28,9 +28,11 @@ import { MapPanel } from "./map_panel.js";
 import { SidePanel } from "./side_panel.js";
 
 // --- Configuration ---
+// Auto-detect wss:// when served over HTTPS (e.g. behind OpenShift Route)
+const _wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
 const WS_URL =
   new URLSearchParams(window.location.search).get("ws") ||
-  `ws://${window.location.hostname || "localhost"}:3344/receive`;
+  `${_wsProto}//${window.location.host}/receive`;
 const PROCESS_INTERVAL_MS = 20; // 50Hz processing rate
 const RECONNECT_INTERVAL_MS = 2000;
 

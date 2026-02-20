@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: zelda-map-viz
+  labels:
+    app.kubernetes.io/part-of: zelda-rl
+    app.kubernetes.io/component: visualization
+    app.kubernetes.io/name: zelda-map-viz
+spec:
+  selector:
+    app.kubernetes.io/name: zelda-map-viz
+  ports:
+  - name: http-ws
+    port: 3344
+    targetPort: http-ws
+    protocol: TCP
+  type: ClusterIP
