@@ -734,6 +734,7 @@ def main():
     backtrack_penalty = float(os.getenv("BACKTRACK_PENALTY", "0"))
     distance_bonus = float(os.getenv("DISTANCE_BONUS", "0"))
     directional_bonus = float(os.getenv("DIRECTIONAL_BONUS", "0"))
+    grid_exploration = float(os.getenv("GRID_EXPLORATION", "0"))
     reward_overrides = {}
     if time_penalty != 0:
         reward_overrides["time_penalty"] = time_penalty
@@ -747,6 +748,9 @@ def main():
     if directional_bonus != 0:
         reward_overrides["directional_bonus"] = directional_bonus
         logger.info("Directional bonus: %.1f per new eastward column", directional_bonus)
+    if grid_exploration != 0:
+        reward_overrides["grid_exploration"] = grid_exploration
+        logger.info("Grid exploration: %.3f per tile step", grid_exploration)
     if reward_overrides:
         reward_config = reward_overrides
 

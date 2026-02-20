@@ -71,16 +71,18 @@ spec:
         - name: GOD_MODE_EPOCHS
           value: "12"
         - name: STAGNATION_LIMIT
-          value: "3000"
+          value: "1500"
         - name: NUM_STEPS
           value: "256"
         - name: TIME_PENALTY
           value: "-0.001"
-        # Exploration bonuses — critical for multi-room exploration
+        # Exploration bonuses — must dominate coverage grind to drive room discovery
         - name: DISTANCE_BONUS
-          value: "5"
+          value: "15"
         - name: DIRECTIONAL_BONUS
-          value: "10"
+          value: "20"
+        - name: GRID_EXPLORATION
+          value: "0.02"
         # PPO core — increase updates per batch for stronger policy learning
         - name: UPDATE_EPOCHS
           value: "4"
