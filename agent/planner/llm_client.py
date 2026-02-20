@@ -1,8 +1,21 @@
 """LLM client for RHOAI 3 llm-d inference gateway.
 
 Models are served via LLMInferenceService through the OpenShift Gateway API.
-Internal URL pattern:
-  http://<gateway-svc>/<namespace>/<model-name>/v1/chat/completions
+Supports three connection modes:
+
+  1. Direct URL override (most flexible):
+     Set LLM_VISION_URL, LLM_STATE_URL, LLM_PUZZLE_URL, LLM_ADVISOR_URL
+     to full endpoint URLs.  Ignores gateway/namespace/model name entirely.
+     Example: LLM_STATE_URL=http://qwen-7b.my-ns.svc:8000/v1/chat/completions
+
+  2. Direct workload service (default for in-cluster):
+     LLM_USE_DIRECT=true builds URLs from model name + namespace:
+     {protocol}://{model}-{service_suffix}.{namespace}.{cluster_domain}:{port}/v1/chat/completions
+     All components are configurable via env vars.
+
+  3. Gateway mode:
+     LLM_USE_DIRECT=false routes through the llm-d inference gateway:
+     {gateway_url}/{namespace}/{model}/v1/chat/completions
 
 Model mapping:
   vision — qwen25-vl-32b (multimodal frame analysis)
@@ -41,6 +54,12 @@ DEFAULT_NAMESPACE = os.getenv("LLM_NAMESPACE", "zelda-rl")
 # Set LLM_USE_DIRECT=true to enable (default for in-cluster).
 USE_DIRECT = os.getenv("LLM_USE_DIRECT", "true").lower() in ("true", "1", "yes")
 
+# Direct service URL components — configurable for different clusters/namespaces
+DIRECT_SERVICE_SUFFIX = os.getenv("LLM_SERVICE_SUFFIX", "kserve-workload-svc")
+DIRECT_PORT = os.getenv("LLM_SERVICE_PORT", "8000")
+DIRECT_PROTOCOL = os.getenv("LLM_SERVICE_PROTOCOL", "https")
+DIRECT_CLUSTER_DOMAIN = os.getenv("LLM_CLUSTER_DOMAIN", "svc.cluster.local")
+
 # Model name → LLMInferenceService name mapping
 MODEL_ROUTES = {
     "vision": os.getenv("LLM_VISION_MODEL", "qwen25-vl-32b"),
@@ -48,6 +67,16 @@ MODEL_ROUTES = {
     "puzzle": os.getenv("LLM_PUZZLE_MODEL", "qwen25-32b"),
     "state": os.getenv("LLM_STATE_MODEL", "qwen25-7b"),
     "advisor": os.getenv("LLM_ADVISOR_MODEL", "qwen25-32b"),
+}
+
+# Per-route URL overrides — if set, bypass gateway/direct pattern entirely.
+# This is the most flexible option for cross-namespace or cross-cluster models.
+ROUTE_URL_OVERRIDES = {
+    "vision": os.getenv("LLM_VISION_URL", ""),
+    "dialog": os.getenv("LLM_DIALOG_URL", ""),
+    "puzzle": os.getenv("LLM_PUZZLE_URL", ""),
+    "state": os.getenv("LLM_STATE_URL", ""),
+    "advisor": os.getenv("LLM_ADVISOR_URL", ""),
 }
 
 
@@ -69,8 +98,14 @@ class LLMClient:
         self._timeout = timeout_s
         self._seed = seed
         self._use_direct = use_direct
-        # Direct mode uses HTTPS with self-signed certs (vLLM secure serving)
-        self._client = httpx.Client(timeout=self._timeout, verify=not use_direct)
+        # Disable SSL verification for direct mode (self-signed certs) or
+        # when LLM_VERIFY_SSL is explicitly set to false
+        verify_ssl = os.getenv("LLM_VERIFY_SSL", "").lower()
+        if verify_ssl:
+            ssl_verify = verify_ssl in ("true", "1", "yes")
+        else:
+            ssl_verify = not use_direct
+        self._client = httpx.Client(timeout=self._timeout, verify=ssl_verify)
 
     def close(self) -> None:
         self._client.close()
@@ -188,19 +223,13 @@ class LLMClient:
     ) -> dict[str, Any]:
         """Make an HTTP call with retries and JSON parsing.
 
-        Uses OpenAI-compatible /v1/chat/completions format.
-        Direct mode: https://{model}-kserve-workload-svc.{ns}.svc:8000/v1/chat/completions
-        Gateway mode: http://{gateway}/{namespace}/{model}/v1/chat/completions
+        URL resolution order:
+          1. Per-route URL override (LLM_{ROUTE}_URL env var) — most flexible
+          2. Direct workload service (LLM_USE_DIRECT=true) — in-cluster default
+          3. Gateway mode (LLM_USE_DIRECT=false) — through llm-d gateway
         """
         model_name = MODEL_ROUTES.get(route.lstrip("/"), route.lstrip("/"))
-        if self._use_direct:
-            url = (
-                f"https://{model_name}-kserve-workload-svc"
-                f".{self._namespace}.svc.cluster.local:8000"
-                f"/v1/chat/completions"
-            )
-        else:
-            url = f"{self._gateway}/{self._namespace}/{model_name}/v1/chat/completions"
+        url = self._resolve_url(route, model_name)
         session_id = self._session_id(messages)
 
         payload = {
@@ -246,6 +275,27 @@ class LLMClient:
 
         logger.error("LLM %s failed after %d retries: %s", route, self._max_retries, last_error)
         return {"error": str(last_error), "route": route}
+
+    def _resolve_url(self, route: str, model_name: str) -> str:
+        """Resolve the endpoint URL for a given route.
+
+        Priority:
+          1. Per-route URL override (LLM_{ROUTE}_URL) — full URL, no pattern
+          2. Direct workload service — build from model + namespace + service components
+          3. Gateway — route through the llm-d inference gateway
+        """
+        # Check for per-route URL override first
+        override = ROUTE_URL_OVERRIDES.get(route.lstrip("/"), "")
+        if override:
+            return override
+
+        if self._use_direct:
+            return (
+                f"{DIRECT_PROTOCOL}://{model_name}-{DIRECT_SERVICE_SUFFIX}"
+                f".{self._namespace}.{DIRECT_CLUSTER_DOMAIN}:{DIRECT_PORT}"
+                f"/v1/chat/completions"
+            )
+        return f"{self._gateway}/{self._namespace}/{model_name}/v1/chat/completions"
 
     def _parse_json(self, content: str) -> dict[str, Any]:
         """Parse JSON from LLM output, with repair for common issues."""

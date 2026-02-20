@@ -111,6 +111,31 @@ spec:
           value: "roms/zelda.gbc.pre-maku.state"
         - name: WALKTHROUGH_PATH
           value: "data/zelda_oos_walkthrough.txt"
+        # LLM judge/advisor connection — set per-route URLs for cross-namespace
+        # or cross-cluster model serving.  If *_URL is set, it overrides the
+        # gateway/direct pattern entirely.  Otherwise, direct mode builds URLs
+        # from model name + namespace + service components.
+        - name: LLM_NAMESPACE
+          value: "zelda-rl"
+        - name: LLM_USE_DIRECT
+          value: "true"
+        - name: LLM_STATE_MODEL
+          value: "qwen25-7b"
+        - name: LLM_PUZZLE_MODEL
+          value: "qwen25-32b"
+        - name: LLM_VISION_MODEL
+          value: "qwen25-vl-32b"
+        - name: LLM_ADVISOR_MODEL
+          value: "qwen25-32b"
+        # Per-route URL overrides (uncomment to point to specific endpoints):
+        # - name: LLM_STATE_URL
+        #   value: "http://qwen25-7b.other-ns.svc:8000/v1/chat/completions"
+        # - name: LLM_PUZZLE_URL
+        #   value: "http://qwen25-32b.other-ns.svc:8000/v1/chat/completions"
+        # - name: LLM_VISION_URL
+        #   value: "http://qwen25-vl-32b.other-ns.svc:8000/v1/chat/completions"
+        # - name: LLM_ADVISOR_URL
+        #   value: "http://qwen25-32b.other-ns.svc:8000/v1/chat/completions"
         # Paths
         - name: ROM_PATH
           value: "/home/trainer/roms/zelda.gbc"
