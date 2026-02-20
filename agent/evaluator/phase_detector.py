@@ -78,11 +78,18 @@ def detect_phase(milestones: dict) -> str:
     threshold for hard milestones prevents the system from getting stuck
     in a phase that the agent will never reach 60% on.
 
+    **Save-state baseline awareness**: If the save state already has an item
+    (e.g. sword), the agent will never "get" it during training, so the
+    milestone percentage stays at 0%.  The ``baseline_has_*`` fields in
+    milestones let us skip phases that the save state has already completed.
+
     Args:
         milestones: Dict from epoch metadata with keys like total_got_sword,
                     total_visited_maku_tree, total_maku_dialog,
                     total_entered_dungeon, and total_episodes (or
-                    episodes_completed).
+                    episodes_completed).  Also accepts baseline_has_sword,
+                    baseline_has_maku_dialog, baseline_has_gnarled_key,
+                    baseline_has_maku_seed to skip completed phases.
 
     Returns:
         Phase string: one of PHASES.
@@ -99,16 +106,22 @@ def detect_phase(milestones: dict) -> str:
         1,
     )
 
+    # Save-state baseline — skip phases the save state already completed.
+    # If the save state has the sword, the agent will never "get" it during
+    # training, so got_sword_pct stays at 0%.  Treat baseline items as 100%.
+    baseline_sword = milestones.get("baseline_has_sword", False)
+    baseline_maku_dialog = milestones.get("baseline_has_maku_dialog", False)
+
     got_sword_pct = 100.0 * milestones.get("total_got_sword", 0) / total_eps
     visited_maku_pct = 100.0 * milestones.get("total_visited_maku_tree", 0) / total_eps
     maku_dialog_pct = 100.0 * milestones.get("total_maku_dialog", 0) / total_eps
     entered_dungeon_pct = 100.0 * milestones.get("total_entered_dungeon", 0) / total_eps
 
-    if got_sword_pct < 60:
+    if not baseline_sword and got_sword_pct < 60:
         return "pre_sword"
     if visited_maku_pct < 60:
         return "pre_maku"
-    if maku_dialog_pct < 30:
+    if not baseline_maku_dialog and maku_dialog_pct < 30:
         return "maku_interaction"
     if entered_dungeon_pct < 30:
         return "pre_dungeon"

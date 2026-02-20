@@ -518,6 +518,16 @@ class RewardWrapper(gym.Wrapper):
             self._prev_maku_stage > self._baseline_maku_stage
         )
 
+        # Save-state baseline inventory — reported every step so the training
+        # loop can record what the agent *starts* with.  The phase detector
+        # uses this to skip phases the save state has already completed
+        # (e.g. don't target Hero's Cave if the save state already has sword).
+        info["baseline_has_sword"] = float(self._baseline_sword > 0)
+        info["baseline_has_maku_dialog"] = float(self._baseline_maku_dialog)
+        info["baseline_has_gnarled_key"] = float(self._baseline_gnarled_key)
+        info["baseline_has_maku_seed"] = float(self._baseline_maku_seed)
+        info["baseline_maku_stage"] = float(self._baseline_maku_stage)
+
         return obs, reward, terminated, truncated, info
 
     def _compute_reward(

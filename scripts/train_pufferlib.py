@@ -405,6 +405,16 @@ def run_training_epoch(
         "max_maku_rooms": 0,
         "max_essences": 0,
         "max_dungeon_keys": 0,
+        # Save-state baseline — what the agent already has at episode start.
+        # Captured once from the first completed episode (same for all episodes
+        # since they share the same save state).  Used by the phase detector
+        # to skip phases the save state has already completed.
+        "baseline_has_sword": False,
+        "baseline_has_maku_dialog": False,
+        "baseline_has_gnarled_key": False,
+        "baseline_has_maku_seed": False,
+        "baseline_maku_stage": 0,
+        "baseline_captured": False,
     }
 
     global_step = 0
@@ -493,6 +503,26 @@ def run_training_epoch(
                             milestones["max_dungeon_keys"],
                             int(env_info.get("milestone_dungeon_keys", 0)),
                         )
+
+                        # Capture save-state baseline once (identical for all
+                        # episodes since they share the same save state).
+                        if not milestones["baseline_captured"]:
+                            milestones["baseline_has_sword"] = bool(
+                                env_info.get("baseline_has_sword", 0)
+                            )
+                            milestones["baseline_has_maku_dialog"] = bool(
+                                env_info.get("baseline_has_maku_dialog", 0)
+                            )
+                            milestones["baseline_has_gnarled_key"] = bool(
+                                env_info.get("baseline_has_gnarled_key", 0)
+                            )
+                            milestones["baseline_has_maku_seed"] = bool(
+                                env_info.get("baseline_has_maku_seed", 0)
+                            )
+                            milestones["baseline_maku_stage"] = int(
+                                env_info.get("baseline_maku_stage", 0)
+                            )
+                            milestones["baseline_captured"] = True
 
             obs = torch.tensor(np.asarray(next_obs_np), dtype=torch.float32, device=device)
             global_step += num_envs
