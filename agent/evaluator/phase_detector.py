@@ -109,8 +109,11 @@ def detect_phase(milestones: dict) -> str:
     # Save-state baseline — skip phases the save state already completed.
     # If the save state has the sword, the agent will never "get" it during
     # training, so got_sword_pct stays at 0%.  Treat baseline items as 100%.
+    # With advancing checkpoints, baselines shift as the save state advances.
     baseline_sword = milestones.get("baseline_has_sword", False)
+    baseline_maku_visit = milestones.get("baseline_in_maku", False)
     baseline_maku_dialog = milestones.get("baseline_has_maku_dialog", False)
+    baseline_dungeon = milestones.get("baseline_in_dungeon", False)
 
     got_sword_pct = 100.0 * milestones.get("total_got_sword", 0) / total_eps
     visited_maku_pct = 100.0 * milestones.get("total_visited_maku_tree", 0) / total_eps
@@ -119,10 +122,10 @@ def detect_phase(milestones: dict) -> str:
 
     if not baseline_sword and got_sword_pct < 60:
         return "pre_sword"
-    if visited_maku_pct < 60:
+    if not baseline_maku_visit and visited_maku_pct < 60:
         return "pre_maku"
     if not baseline_maku_dialog and maku_dialog_pct < 30:
         return "maku_interaction"
-    if entered_dungeon_pct < 30:
+    if not baseline_dungeon and entered_dungeon_pct < 30:
         return "pre_dungeon"
     return "dungeon"

@@ -11,6 +11,8 @@ Also handles episode export to MinIO for the judge/eval pipeline.
 
 from __future__ import annotations
 
+import io
+import json
 import logging
 import os
 from collections import deque
@@ -221,6 +223,12 @@ class RewardWrapper(gym.Wrapper):
         self._milestone_dungeon_keys = 0
         self._milestone_max_rooms = 0
 
+        # Advancing checkpoint: capture PyBoy save states at milestone moments.
+        # Workers write .state files to MILESTONE_STATE_DIR; the training loop
+        # reads them at epoch end to decide whether to advance the save state.
+        self._milestone_state_dir = os.getenv("MILESTONE_STATE_DIR", "")
+        self._captured_milestones: set[str] = set()
+
         # Episode export (must be after self._epoch is set)
         # Only export from a fraction of environments to reduce MinIO storage.
         # The judge only needs 30 segments per epoch — no need for all envs
@@ -308,6 +316,54 @@ class RewardWrapper(gym.Wrapper):
         except Exception as e:
             logger.warning("Episode export disabled: %s", e)
             self._exporter = None
+
+    def _capture_milestone_state(self, milestone_name: str, reward_so_far: float) -> None:
+        """Capture PyBoy emulator state when a milestone fires.
+
+        Writes the state bytes to a temp file that the training loop
+        reads at epoch end for advancing checkpoint selection.
+        Only captures once per milestone per episode.
+        """
+        if not self._milestone_state_dir:
+            return
+        if milestone_name in self._captured_milestones:
+            return
+        if not hasattr(self.env, "_pyboy") or self.env._pyboy is None:
+            return
+
+        self._captured_milestones.add(milestone_name)
+
+        # Capture current emulator state
+        buf = io.BytesIO()
+        self.env._pyboy.save_state(buf)
+        state_bytes = buf.getvalue()
+
+        # Write state file
+        env_id = id(self) % 100000
+        filename = f"{milestone_name}_{env_id}_{self._epoch}.state"
+        state_path = os.path.join(self._milestone_state_dir, filename)
+
+        os.makedirs(self._milestone_state_dir, exist_ok=True)
+        with open(state_path, "wb") as f:
+            f.write(state_bytes)
+
+        # Write metadata sidecar
+        room_id = getattr(self.env, "room_id", -1) if hasattr(self.env, "room_id") else -1
+        meta = {
+            "milestone": milestone_name,
+            "epoch": self._epoch,
+            "room_id": room_id,
+            "reward_so_far": reward_so_far,
+            "unique_rooms": self._coverage.unique_rooms,
+            "unique_tiles": self._coverage.total_tiles,
+        }
+        with open(state_path + ".json", "w") as f:
+            json.dump(meta, f)
+
+        logger.info(
+            "Captured milestone state: %s (room=%d, reward=%.1f, tiles=%d)",
+            milestone_name, room_id, reward_so_far, meta["unique_tiles"],
+        )
 
     def reset(self, **kwargs) -> tuple[np.ndarray, dict[str, Any]]:
         obs, info = self.env.reset(**kwargs)
@@ -399,6 +455,7 @@ class RewardWrapper(gym.Wrapper):
         self._baseline_group = self._prev_group
         self._gate_slashed = False
         self._maku_rooms_visited.clear()
+        self._captured_milestones.clear()
         if self._shaping:
             self._shaping.reset()
 
@@ -527,6 +584,8 @@ class RewardWrapper(gym.Wrapper):
         info["baseline_has_gnarled_key"] = float(self._baseline_gnarled_key)
         info["baseline_has_maku_seed"] = float(self._baseline_maku_seed)
         info["baseline_maku_stage"] = float(self._baseline_maku_stage)
+        info["baseline_in_maku"] = float(self._baseline_group == 2)
+        info["baseline_in_dungeon"] = float(self._baseline_group in (4, 5))
 
         return obs, reward, terminated, truncated, info
 
@@ -577,6 +636,7 @@ class RewardWrapper(gym.Wrapper):
             if sword > self._prev_sword:
                 reward += self._sword_bonus
                 self._milestone_achieved_this_step = True
+                self._capture_milestone_state("got_sword", reward)
             self._prev_sword = sword
 
             # Essences
@@ -594,11 +654,13 @@ class RewardWrapper(gym.Wrapper):
         if active_group in (4, 5) and self._prev_group not in (4, 5):
             reward += self._dungeon_entry_bonus
             self._milestone_achieved_this_step = True
+            self._capture_milestone_state("entered_dungeon", reward)
 
         # Maku Tree visit bonus: ACTIVE_GROUP changed to 2
         if active_group == 2 and self._prev_group != 2:
             reward += self._maku_tree_visit_bonus
             self._milestone_achieved_this_step = True
+            self._capture_milestone_state("visited_maku_tree", reward)
 
         # Indoor area bonus: ACTIVE_GROUP changed to 3
         if active_group == 3 and self._prev_group != 3:
@@ -631,6 +693,7 @@ class RewardWrapper(gym.Wrapper):
                 reward += self._maku_dialog_bonus
                 self._milestone_achieved_this_step = True
                 logger.info("MILESTONE: Maku Tree gave Gnarled Key quest! (+%.0f)", self._maku_dialog_bonus)
+                self._capture_milestone_state("maku_dialog", reward)
             self._prev_maku_dialog = maku_dialog
 
             # Check TREASURE_GNARLED_KEY obtained (picked up the key item)
@@ -639,6 +702,7 @@ class RewardWrapper(gym.Wrapper):
                 reward += self._gnarled_key_bonus
                 self._milestone_achieved_this_step = True
                 logger.info("MILESTONE: Gnarled Key obtained! (+%.0f)", self._gnarled_key_bonus)
+                self._capture_milestone_state("gnarled_key", reward)
             self._prev_gnarled_key = gnarled_key
 
             # Check GLOBALFLAG_GOT_MAKU_SEED (end-game, after all 8 essences)
@@ -666,6 +730,7 @@ class RewardWrapper(gym.Wrapper):
                     "MILESTONE: Maku Tree gate slashed! room=%d flags=0x%02X (+%.0f)",
                     room_id, room_flags, self._gate_slash_bonus,
                 )
+                self._capture_milestone_state("gate_slashed", reward)
 
             # 2. New rooms within group 2 — each new room means deeper
             #    progress into the Maku Tree area

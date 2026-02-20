@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import sys
 import time
 from functools import partial
@@ -332,6 +333,14 @@ def run_training_epoch(
     if rm_path:
         logger.info("Reward model shaping: %s", rm_path)
 
+    # Set up milestone state directory for advancing checkpoint capture
+    milestone_state_dir = os.path.join(checkpoint_dir, "milestone_states")
+    from agent.rl.advancing_checkpoint import clear_milestone_states
+    cleared = clear_milestone_states(milestone_state_dir)
+    if cleared:
+        logger.info("Cleared %d stale milestone state files", cleared)
+    os.environ["MILESTONE_STATE_DIR"] = milestone_state_dir
+
     # Create vectorized environment
     env_fn = partial(
         make_env,
@@ -435,6 +444,8 @@ def run_training_epoch(
         "baseline_has_gnarled_key": False,
         "baseline_has_maku_seed": False,
         "baseline_maku_stage": 0,
+        "baseline_in_maku": False,
+        "baseline_in_dungeon": False,
         "baseline_captured": False,
     }
 
@@ -542,6 +553,12 @@ def run_training_epoch(
                             )
                             milestones["baseline_maku_stage"] = int(
                                 env_info.get("baseline_maku_stage", 0)
+                            )
+                            milestones["baseline_in_maku"] = bool(
+                                env_info.get("baseline_in_maku", 0)
+                            )
+                            milestones["baseline_in_dungeon"] = bool(
+                                env_info.get("baseline_in_dungeon", 0)
                             )
                             milestones["baseline_captured"] = True
 
@@ -724,7 +741,53 @@ def run_training_epoch(
     # Cleanup
     vecenv.close()
 
-    return ckpt_path, avg_reward, metadata
+    # --- Advancing checkpoint selection ---
+    from agent.rl.advancing_checkpoint import (
+        AdvancementDecision,
+        select_advancing_checkpoint,
+        upload_advancing_state,
+    )
+
+    decision = select_advancing_checkpoint(
+        milestones=milestones,
+        episodes_completed=len(completed_rewards),
+        milestone_state_dir=milestone_state_dir,
+        current_milestone=None,  # overridden by caller
+        threshold=0.40,
+    )
+
+    if decision.should_advance:
+        logger.info("ADVANCING CHECKPOINT: %s", decision.reason)
+        try:
+            s3_key = upload_advancing_state(
+                state_path=decision.state_path,
+                milestone=decision.milestone_name,
+                epoch=epoch,
+                metadata={
+                    "percentage": decision.percentage,
+                    "episodes": len(completed_rewards),
+                    "mean_reward": avg_reward,
+                },
+            )
+            metadata["advancing_checkpoint"] = {
+                "milestone": decision.milestone_name,
+                "percentage": decision.percentage,
+                "s3_key": s3_key,
+                "state_path": decision.state_path,
+            }
+        except Exception as e:
+            logger.warning("Failed to upload advancing state: %s", e)
+    else:
+        logger.info("No checkpoint advancement: %s", decision.reason)
+
+    metadata["advancement_decision"] = {
+        "should_advance": decision.should_advance,
+        "milestone": decision.milestone_name,
+        "percentage": decision.percentage,
+        "reason": decision.reason,
+    }
+
+    return ckpt_path, avg_reward, metadata, decision
 
 
 # ---------------------------------------------------------------------------
@@ -797,6 +860,11 @@ def main():
     global_best_checkpoint = ""
     global_best_mean = -float("inf")
 
+    # Advancing checkpoint state — track which milestone the current
+    # save state represents so we only advance forward, never backward.
+    current_milestone: str | None = None
+    original_save_state_path = save_state_path
+
     # Initial reward config from env vars (overridden later by reward advisor)
     reward_config: dict | None = None
     time_penalty = float(os.getenv("TIME_PENALTY", "0"))
@@ -844,7 +912,7 @@ def main():
         god_mode = epoch < (start_epoch + god_mode_epochs)
 
         # Phase 1: Training
-        checkpoint, mean_reward, metadata = run_training_epoch(
+        checkpoint, mean_reward, metadata, advancement = run_training_epoch(
             epoch=epoch,
             num_envs=num_envs,
             num_workers=num_workers,
@@ -880,6 +948,34 @@ def main():
                 "Epoch %d mean=%.1f (best=%.1f) -- continuing from latest",
                 epoch, mean_reward, global_best_mean,
             )
+
+        # --- Advancing checkpoint: apply or rollback ---
+        if advancement.should_advance:
+            advancing_path = os.path.join(
+                checkpoint_dir,
+                f"advancing_{advancement.milestone_name}.state",
+            )
+            shutil.copy2(advancement.state_path, advancing_path)
+            prev_state = save_state_path
+            save_state_path = advancing_path
+            current_milestone = advancement.milestone_name
+            logger.info(
+                "Next epoch will start from advancing checkpoint: %s -> %s "
+                "(milestone: %s, %.0f%%)",
+                os.path.basename(prev_state),
+                os.path.basename(advancing_path),
+                current_milestone,
+                advancement.percentage * 100,
+            )
+        elif current_milestone and mean_reward < (global_best_mean * 0.5):
+            # Rollback: advancing state caused significant regression
+            logger.warning(
+                "ROLLBACK: Mean reward %.1f is <50%% of best %.1f -- "
+                "reverting to original save state",
+                mean_reward, global_best_mean,
+            )
+            save_state_path = original_save_state_path
+            current_milestone = None
 
         # Phase 2: Evaluation + reward model + reward advisor
         if run_eval:
