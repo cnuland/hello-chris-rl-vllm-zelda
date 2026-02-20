@@ -682,6 +682,11 @@ def main():
     god_mode_epochs = int(os.getenv("GOD_MODE_EPOCHS", "6"))
     checkpoint_dir = os.getenv("CHECKPOINT_DIR", "/tmp/pufferlib-checkpoints")
 
+    # PPO core hyperparameters — configurable via env vars for tuning
+    update_epochs = int(os.getenv("UPDATE_EPOCHS", "2"))
+    clip_coef = float(os.getenv("CLIP_COEF", "0.2"))
+    gamma = float(os.getenv("GAMMA", "0.999"))
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Device: %s", device)
     if device.type == "cuda":
@@ -775,6 +780,9 @@ def main():
             save_state_path=save_state_path,
             num_steps=num_steps,
             minibatch_size=minibatch_size,
+            update_epochs=update_epochs,
+            clip_coef=clip_coef,
+            gamma=gamma,
         )
 
         # Always continue from latest checkpoint to avoid reverting

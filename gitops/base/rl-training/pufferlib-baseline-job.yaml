@@ -50,9 +50,9 @@ spec:
         - name: EPOCH_STEPS
           value: "2000000"
         - name: NUM_ENVS
-          value: "48"
+          value: "96"
         - name: NUM_WORKERS
-          value: "8"
+          value: "12"
         - name: EPISODE_LENGTH
           value: "30000"
         - name: MINIBATCH_SIZE
@@ -61,9 +61,9 @@ spec:
           value: "false"
         # Scheduling — lower entropy to let policy specialize
         - name: ENTROPY_START
-          value: "0.005"
+          value: "0.003"
         - name: ENTROPY_END
-          value: "0.001"
+          value: "0.0005"
         - name: LR_START
           value: "2.5e-4"
         - name: LR_END
@@ -76,6 +76,13 @@ spec:
           value: "256"
         - name: TIME_PENALTY
           value: "-0.001"
+        # PPO core — increase updates per batch for stronger policy learning
+        - name: UPDATE_EPOCHS
+          value: "4"
+        - name: CLIP_COEF
+          value: "0.1"
+        - name: GAMMA
+          value: "0.998"
         # Evaluation — skip LLM judges for baseline, just measure exploration
         - name: RUN_EVAL
           value: "false"
