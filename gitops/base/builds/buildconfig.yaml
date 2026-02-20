@@ -20,7 +20,7 @@ spec:
       kind: DockerImage
       name: quay.io/cnuland/zelda-pufferlib-trainer:latest
     pushSecret:
-      name: quay-push-credentials
+      name: quay-viz-push
   resources:
     requests:
       cpu: "1"
