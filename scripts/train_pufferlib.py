@@ -771,15 +771,17 @@ def main():
             minibatch_size=minibatch_size,
         )
 
-        # Update global best
+        # Always continue from latest checkpoint to avoid reverting
+        # learning progress. During early training, mean reward dips
+        # as the policy transitions from random to directed behavior —
+        # reverting to the "best" random checkpoint prevents specialization.
+        global_best_checkpoint = checkpoint
         if mean_reward > global_best_mean:
-            global_best_checkpoint = checkpoint
             global_best_mean = mean_reward
-            logger.info("New global best: mean=%.1f (epoch %d)", mean_reward, epoch)
+            logger.info("New best mean reward: %.1f (epoch %d)", mean_reward, epoch)
         else:
             logger.info(
-                "Epoch %d mean=%.1f below global best=%.1f -- "
-                "next epoch restores from global best",
+                "Epoch %d mean=%.1f (best=%.1f) -- continuing from latest",
                 epoch, mean_reward, global_best_mean,
             )
 
