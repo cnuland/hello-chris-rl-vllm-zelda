@@ -316,8 +316,22 @@ class RewardWrapper(gym.Wrapper):
 
         # Distance/directional bonus tracking
         self._start_room_id = info.get("room_id", 0)
+        self._start_group = info.get("active_group", 0)
         self._max_distance_achieved = 0
         self._max_directional_progress = 0
+
+        # Log starting position once per epoch for debugging
+        if not hasattr(self, "_logged_start"):
+            logger.info(
+                "Episode start: room_id=%d (row=%d, col=%d), group=%d, "
+                "pixel=(%d,%d), sword=%d",
+                self._start_room_id,
+                self._start_room_id // 16, self._start_room_id % 16,
+                info.get("active_group", -1),
+                info.get("pixel_x", 0), info.get("pixel_y", 0),
+                self._prev_sword,
+            )
+            self._logged_start = True
 
         # Reset milestones for new episode — record what the save state
         # already has so milestone reporting only counts NEW achievements.
@@ -609,11 +623,12 @@ class RewardWrapper(gym.Wrapper):
                 reward += curiosity
 
         # --- Distance and directional exploration bonuses ---
-        # Only on overworld (group 0) where room_id maps to a 16×16 grid.
-        # These bonuses were critical in the RLLib approach that achieved 13
-        # rooms: they provide strong one-time rewards for reaching new territory,
-        # creating a reward gradient across the entire map.
-        if active_group == 0 and not is_transitioning:
+        # Reward reaching new rooms based on room_id distance from the starting
+        # room.  Works across ALL area groups (overworld, indoors, dungeons) so
+        # the agent always has an incentive to push further.  The 16×16 room grid
+        # math is imprecise for indoor rooms, but still gives a useful signal for
+        # "room_id changed → you went somewhere new."
+        if not is_transitioning:
             room_id = info.get("room_id", 0)
             start_row = self._start_room_id // 16
             start_col = self._start_room_id % 16
