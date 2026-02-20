@@ -98,9 +98,9 @@ spec:
         - name: REWARD_MODEL_PATH
           value: ""
         - name: SAVE_STATE_PATH
-          value: "/home/trainer/roms/zelda.gbc.sword.state"
+          value: "/home/trainer/roms/zelda.gbc.pre-maku.state"
         - name: SAVE_STATE_S3_KEY
-          value: "roms/zelda.gbc.sword.state"
+          value: "roms/zelda.gbc.pre-maku.state"
         - name: WALKTHROUGH_PATH
           value: "data/zelda_oos_walkthrough.txt"
         # Paths
