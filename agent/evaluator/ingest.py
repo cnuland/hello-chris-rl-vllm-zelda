@@ -1,10 +1,12 @@
-"""Evaluator ingest: batch segments through llm-d judges.
+"""Evaluator ingest: batch segments through phase-aware llm-d judges.
 
 Pipeline:
-  1. Read segments from MinIO.
-  2. Fan out to vision/state/puzzle judges via llm-d gateway.
-  3. Self-consistency M=3 (three passes), majority vote.
-  4. Write scores.jsonl back to MinIO.
+  1. Detect the agent's current game phase from epoch milestones.
+  2. Read segments from MinIO.
+  3. Fan out to vision/state/puzzle judges via llm-d gateway with
+     phase-specific prompts and dynamic rubric weights.
+  4. Self-consistency M=3 (three passes), majority vote.
+  5. Write scores.jsonl back to MinIO.
 
 Judge model mapping:
   - state (qwen25-7b):     progress, dialog, efficiency scoring
@@ -21,22 +23,168 @@ import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+from agent.evaluator.phase_detector import detect_phase
+
 logger = logging.getLogger(__name__)
 
-# Rubric weights (from new/JUDGES_RUBRIC.md)
-RUBRIC_WEIGHTS = {
-    "progress": 0.4,
-    "dialog": 0.2,
-    "puzzle": 0.2,
-    "novelty": 0.1,
-    "efficiency": 0.1,
+# Default rubric weights (fallback when phase is unknown)
+DEFAULT_RUBRIC_WEIGHTS = {
+    "progress": 0.40,
+    "dialog": 0.20,
+    "puzzle": 0.20,
+    "novelty": 0.10,
+    "efficiency": 0.10,
 }
 
-SCORE_KEYS = list(RUBRIC_WEIGHTS.keys())
+# Phase-specific rubric weights — shift emphasis based on what matters
+# most at each stage of the game.  Key design decisions:
+#   - pre_sword: novelty high (0.25) because exploration is the core task
+#   - pre_maku: progress high (0.45) because directional movement matters
+#   - maku_interaction: dialog jumps to 0.40 — this is THE critical blocker
+#   - dungeon: puzzle at 0.40 because puzzles ARE the dungeon gameplay
+PHASE_WEIGHTS: dict[str, dict[str, float]] = {
+    "pre_sword": {
+        "progress": 0.30,
+        "dialog": 0.10,
+        "puzzle": 0.15,
+        "novelty": 0.25,
+        "efficiency": 0.20,
+    },
+    "pre_maku": {
+        "progress": 0.45,
+        "dialog": 0.10,
+        "puzzle": 0.10,
+        "novelty": 0.20,
+        "efficiency": 0.15,
+    },
+    "maku_interaction": {
+        "progress": 0.20,
+        "dialog": 0.40,
+        "puzzle": 0.20,
+        "novelty": 0.05,
+        "efficiency": 0.15,
+    },
+    "pre_dungeon": {
+        "progress": 0.45,
+        "dialog": 0.05,
+        "puzzle": 0.10,
+        "novelty": 0.25,
+        "efficiency": 0.15,
+    },
+    "dungeon": {
+        "progress": 0.25,
+        "dialog": 0.05,
+        "puzzle": 0.40,
+        "novelty": 0.15,
+        "efficiency": 0.15,
+    },
+}
+
+# Phase-specific judge prompt guidance — tells each judge what
+# "good behavior" looks like at each stage of the game.
+PHASE_PROMPTS: dict[str, dict[str, str]] = {
+    "pre_sword": {
+        "state": (
+            "The agent is in the EARLY GAME and needs to find the Hero's Cave "
+            "to obtain the sword. Good progress means: exploring indoor areas "
+            "(active_group 3), finding new rooms, moving toward caves. "
+            "Dialog is less important at this stage. Efficiency means not "
+            "standing still or looping through the same rooms."
+        ),
+        "puzzle": (
+            "In the early game, puzzle interaction is minimal. Score based on "
+            "whether the agent interacts with environmental objects (pushing, "
+            "slashing bushes to find cave entrances)."
+        ),
+        "vision": (
+            "Score novelty based on whether the screenshot shows new areas "
+            "the agent hasn't visited before. Indoor areas and cave entrances "
+            "are especially valuable."
+        ),
+    },
+    "pre_maku": {
+        "state": (
+            "The agent HAS the sword and needs to travel EAST then NORTH to "
+            "reach the Maku Tree (active_group 2). Good progress means: "
+            "increasing column number in the room grid (room_id %% 16 should "
+            "increase), discovering new overworld rooms, moving toward the "
+            "northeast quadrant. The Maku Tree area is around row 5, col 12."
+        ),
+        "puzzle": (
+            "Overworld puzzles at this stage involve cutting bushes, pushing "
+            "rocks, and navigating around obstacles to head east. Score any "
+            "progress-enabling environmental interaction."
+        ),
+        "vision": (
+            "Score novelty highly for screenshots showing new overworld areas, "
+            "especially areas to the east and north. The Maku Tree area has "
+            "distinctive grove/tree visuals."
+        ),
+    },
+    "maku_interaction": {
+        "state": (
+            "The agent is AT or NEAR the Maku Tree (active_group 2). "
+            "DIALOG IS CRITICAL — the agent must interact with the Maku Tree "
+            "NPC to receive the Gnarled Key quest. Score dialog very highly "
+            "(0.8-1.0) if the agent triggers ANY dialog in group 2. "
+            "Score progress highly for staying in group 2 and exploring new "
+            "rooms within it. Penalize leaving group 2 unnecessarily."
+        ),
+        "puzzle": (
+            "At the Maku Tree, the agent needs to: slash the gate (sword on "
+            "a specific tile), navigate through the grove, pop a bubble "
+            "(attack), and advance dialog. Score ANY interaction with "
+            "objects in group 2 highly."
+        ),
+        "vision": (
+            "At the Maku Tree, the screen should show the grove area with "
+            "the large tree NPC. Score screenshots showing the Maku Tree "
+            "and dialog boxes very highly. Score screenshots of the overworld "
+            "(outside group 2) low."
+        ),
+    },
+    "pre_dungeon": {
+        "state": (
+            "The agent has the Gnarled Key quest and needs to travel WEST to "
+            "find Dungeon 1 (Gnarled Root). Good progress: decreasing column "
+            "number, discovering rooms to the west, entering active_group "
+            "4 or 5 (dungeon). Dialog is less important now."
+        ),
+        "puzzle": (
+            "The agent may need to solve environmental puzzles to reach the "
+            "dungeon entrance (season changes, bush cutting, rock pushing). "
+            "Score any puzzle-solving behavior that opens paths westward."
+        ),
+        "vision": (
+            "Score novelty for new western overworld areas. The dungeon "
+            "entrance is a distinctive cave opening. Score dungeon interior "
+            "screenshots very highly."
+        ),
+    },
+    "dungeon": {
+        "state": (
+            "The agent is IN a dungeon (active_group 4-5). Progress means: "
+            "advancing floors, finding keys, defeating enemies, reaching the "
+            "boss. Score room exploration within the dungeon highly."
+        ),
+        "puzzle": (
+            "Dungeon puzzles are the core challenge: pushing blocks, hitting "
+            "switches, using keys on locked doors, navigating dark rooms, "
+            "defeating mini-bosses. Score any puzzle interaction very highly."
+        ),
+        "vision": (
+            "Dungeon interiors have distinctive tile patterns and objects. "
+            "Score screenshots showing new dungeon rooms, boss encounters, "
+            "puzzle elements (blocks, switches), and treasure chests highly."
+        ),
+    },
+}
+
+SCORE_KEYS = list(DEFAULT_RUBRIC_WEIGHTS.keys())
 
 
 class EvaluatorIngest:
-    """Batch evaluate episode segments using LLM judges."""
+    """Phase-aware batch evaluator for episode segments using LLM judges."""
 
     def __init__(
         self,
@@ -45,11 +193,20 @@ class EvaluatorIngest:
         episodes_bucket: str = "zelda-episodes",
         consistency_m: int = 3,
         walkthrough_path: str | None = None,
+        milestones: dict | None = None,
+        weight_overrides: dict[str, float] | None = None,
     ):
         self._llm = llm_client
         self._s3 = s3_client
         self._bucket = episodes_bucket
         self._m = consistency_m
+
+        # Detect game phase from milestones
+        self._phase = detect_phase(milestones or {})
+        logger.info("Evaluator phase: %s", self._phase)
+
+        # Validate and store advisor weight overrides
+        self._weight_overrides = self._validate_weights(weight_overrides)
 
         # Load game walkthrough for judge context
         self._walkthrough = ""
@@ -60,6 +217,32 @@ class EvaluatorIngest:
                 logger.info("Loaded walkthrough (%d chars) from %s", len(self._walkthrough), walkthrough_path)
             except Exception as e:
                 logger.warning("Could not load walkthrough: %s", e)
+
+    @staticmethod
+    def _validate_weights(overrides: dict[str, float] | None) -> dict[str, float] | None:
+        """Validate weight overrides: all positive, sum ≈ 1.0, max 0.5."""
+        if not overrides:
+            return None
+        if not all(isinstance(v, (int, float)) and v > 0 for v in overrides.values()):
+            return None
+        total = sum(overrides.values())
+        if not (0.8 < total < 1.2):
+            return None
+        normed = {k: v / total for k, v in overrides.items()}
+        if max(normed.values()) > 0.5:
+            return None
+        return normed
+
+    def _get_weights(self) -> dict[str, float]:
+        """Get rubric weights for the current phase, with advisor overrides."""
+        weights = dict(PHASE_WEIGHTS.get(self._phase, DEFAULT_RUBRIC_WEIGHTS))
+
+        if self._weight_overrides:
+            weights.update(self._weight_overrides)
+            total = sum(weights.values())
+            weights = {k: v / total for k, v in weights.items()}
+
+        return weights
 
     def evaluate_segment(self, segment_data: dict[str, Any]) -> dict[str, Any]:
         """Evaluate a single segment with M=3 self-consistency.
@@ -81,12 +264,15 @@ class EvaluatorIngest:
             values = [s.get(key, 0.0) for s in all_scores]
             final_scores[key] = statistics.median(values)
 
-        # Weighted aggregate
-        weighted = sum(final_scores[k] * RUBRIC_WEIGHTS[k] for k in SCORE_KEYS)
+        # Weighted aggregate using phase-specific weights
+        weights = self._get_weights()
+        weighted = sum(final_scores[k] * weights[k] for k in SCORE_KEYS)
 
         result = {
             "segment_id": segment_data.get("segment_id", "unknown"),
+            "phase": self._phase,
             "scores": final_scores,
+            "weights_used": weights,
             "weighted_score": weighted,
             "rationale": self._generate_rationale(final_scores),
             "raw_trials": all_scores,
@@ -158,6 +344,9 @@ class EvaluatorIngest:
 
     def _build_state_prompt(self, segment_data: dict[str, Any]) -> str:
         """Build evaluation prompt for the state judge model."""
+        # Phase-specific guidance
+        phase_guidance = PHASE_PROMPTS.get(self._phase, {}).get("state", "")
+
         states = segment_data.get("states", [])
         summary = f"Segment {segment_data.get('segment_id', '?')}: "
         summary += f"{len(states)} frames, "
@@ -169,7 +358,6 @@ class EvaluatorIngest:
             summary += f"Start room={first.get('room_id', '?')}, "
             summary += f"End room={last.get('room_id', '?')}. "
 
-            # Compute some metrics
             rooms = set()
             dialogs = 0
             for s in states:
@@ -180,12 +368,13 @@ class EvaluatorIngest:
             summary += f"Unique rooms visited: {len(rooms)}. "
             summary += f"Dialog interactions: {dialogs}. "
 
-            # Add context about the area
             active_group = last.get("active_group", 0)
             if active_group in (4, 5):
                 summary += "Agent is inside a DUNGEON. "
             elif active_group == 2:
                 summary += "Agent is at the MAKU TREE (key story location). "
+            elif active_group == 3:
+                summary += "Agent is INDOORS (cave, house, or shop). "
             else:
                 summary += "Agent is in the OVERWORLD. "
             summary += f"Health: {last.get('health', '?')}/{last.get('max_health', '?')}. "
@@ -198,19 +387,28 @@ class EvaluatorIngest:
                 f"{self._walkthrough}\n\n"
             )
 
+        phase_section = ""
+        if phase_guidance:
+            phase_section = (
+                f"CURRENT GAME PHASE: {self._phase}\n"
+                f"PHASE GUIDANCE: {phase_guidance}\n\n"
+            )
+
         return (
             f"{context}"
+            f"{phase_section}"
             f"Rate this Zelda: Oracle of Seasons gameplay segment on: progress, dialog, efficiency. "
-            f"progress: How much the agent advances toward the next quest milestone (finding dungeons, "
-            f"talking to key NPCs like the Maku Tree, collecting essences). "
+            f"progress: How much the agent advances toward the next quest milestone. "
             f"dialog: Quality of NPC dialog interactions (talking to the right NPCs, advancing story). "
             f"efficiency: Steps used productively vs wasted (backtracking, standing still). "
             f"Each score 0.0-1.0. {summary} "
-            f"Output JSON: {{\"scores\": {{\"progress\": float, \"dialog\": float, \"efficiency\": float}}}}"
+            f'Output JSON: {{"scores": {{"progress": float, "dialog": float, "efficiency": float}}}}'
         )
 
     def _build_puzzle_prompt(self, segment_data: dict[str, Any]) -> str:
         """Build evaluation prompt for the puzzle judge model."""
+        phase_guidance = PHASE_PROMPTS.get(self._phase, {}).get("puzzle", "")
+
         states = segment_data.get("states", [])
         summary = f"Segment {segment_data.get('segment_id', '?')}: "
         summary += f"{len(states)} frames. "
@@ -224,7 +422,6 @@ class EvaluatorIngest:
                     puzzle_flags.add(pf)
             summary += f"Puzzle flag changes: {len(puzzle_flags)}. "
 
-            # Add dungeon context
             last = states[-1].get("state", {})
             if last.get("active_group", 0) in (4, 5):
                 summary += f"Currently in dungeon (floor {last.get('dungeon_floor', 0)}). "
@@ -237,17 +434,27 @@ class EvaluatorIngest:
                 f"{self._walkthrough}\n\n"
             )
 
+        phase_section = ""
+        if phase_guidance:
+            phase_section = (
+                f"CURRENT GAME PHASE: {self._phase}\n"
+                f"PHASE GUIDANCE: {phase_guidance}\n\n"
+            )
+
         return (
             f"{context}"
+            f"{phase_section}"
             f"Rate this Zelda: Oracle of Seasons segment on puzzle-solving. "
             f"Puzzles include: pushing blocks, hitting switches, using season changes to open paths, "
             f"navigating dungeon rooms, finding keys and boss keys. "
             f"Score 0.0-1.0 (0=no puzzle progress, 1=solved complex puzzle). {summary} "
-            f"Output JSON: {{\"scores\": {{\"puzzle\": float}}, \"rationale\": str}}"
+            f'Output JSON: {{"scores": {{"puzzle": float}}, "rationale": str}}'
         )
 
     def _build_vision_prompt(self, segment_data: dict[str, Any]) -> str:
         """Build evaluation prompt for the vision judge model."""
+        phase_guidance = PHASE_PROMPTS.get(self._phase, {}).get("vision", "")
+
         states = segment_data.get("states", [])
         summary = f"Segment {segment_data.get('segment_id', '?')}: "
         summary += f"{len(states)} frames. "
@@ -262,6 +469,8 @@ class EvaluatorIngest:
             last = states[-1].get("state", {})
             if last.get("active_group", 0) in (4, 5):
                 summary += "This is a DUNGEON screenshot. "
+            elif last.get("active_group", 0) == 2:
+                summary += "This is a MAKU TREE screenshot. "
             else:
                 summary += "This is an OVERWORLD screenshot. "
 
@@ -273,8 +482,16 @@ class EvaluatorIngest:
                 f"{self._walkthrough}\n\n"
             )
 
+        phase_section = ""
+        if phase_guidance:
+            phase_section = (
+                f"CURRENT GAME PHASE: {self._phase}\n"
+                f"PHASE GUIDANCE: {phase_guidance}\n\n"
+            )
+
         return (
             f"{context}"
+            f"{phase_section}"
             f"Analyze this Zelda: Oracle of Seasons screenshot for novelty and exploration. "
             f"Rate how novel/interesting the game state is on a 0.0-1.0 scale. "
             f"Consider: new areas explored (dungeons, caves, new overworld screens), "
@@ -299,7 +516,6 @@ class EvaluatorIngest:
                 states = [json.loads(line) for line in states_raw.decode().strip().split("\n")]
                 manifest["states"] = states
 
-                # Download a representative frame PNG for the vision judge
                 frame_keys = [
                     k for k in self._s3.list_keys(self._bucket, prefix=f"{key}/frames/")
                     if k.endswith(".png")

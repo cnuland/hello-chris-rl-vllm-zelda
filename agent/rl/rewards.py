@@ -208,11 +208,22 @@ class PotentialShaping:
     where phi(s) = lambda * R_phi(s).
 
     This preserves optimal policy (Ng et al. 1999).
+
+    Lambda decays with epoch: effective_lam = lam * decay_rate^epoch.
+    This gradually fades the shaping signal as the extrinsic rewards
+    become more reliable (the agent learns to hit milestones consistently).
     """
 
     gamma: float = 0.99
     lam: float = 0.05  # lambda weight for R_phi (conservative to avoid destabilization)
+    epoch: int = 0
+    decay_rate: float = 0.95  # lam decays by 5% per epoch
     _prev_potential: float = 0.0
+
+    @property
+    def effective_lam(self) -> float:
+        """Lambda with epoch-based decay."""
+        return self.lam * (self.decay_rate ** self.epoch)
 
     def shape(self, extrinsic: float, phi_s_prime: float) -> float:
         """Apply potential-based shaping.
@@ -224,7 +235,7 @@ class PotentialShaping:
         Returns:
             Shaped reward.
         """
-        potential = self.lam * phi_s_prime
+        potential = self.effective_lam * phi_s_prime
         shaped = extrinsic + self.gamma * potential - self._prev_potential
         self._prev_potential = potential
         return shaped

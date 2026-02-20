@@ -146,13 +146,24 @@ class RewardWrapper(gym.Wrapper):
         self._start_room_id = -1
         self._max_distance_achieved = 0
 
-        # Directional bonus — reward for moving east/south toward the Maku Tree
-        # area.  Uses distance-based decay (0.999^(dist*500)) so the bonus stays
-        # strong until the agent actually reaches the target area.
+        # Directional bonus — reward for moving toward a configurable target
+        # room on the 16×16 grid.  Uses Manhattan distance reduction: each
+        # new minimum distance from the target earns a one-time bonus.
+        # Default target = Maku Tree area (row=5, col=12), configurable by
+        # the LLM reward advisor each epoch.
         self._directional_bonus = cfg.get("directional_bonus", 10.0)
-        self._directional_decay = cfg.get("directional_decay", 0.999)
-        self._max_directional_progress = 0
+        self._directional_target_row = int(cfg.get("directional_target_row",
+                                                    os.getenv("DIRECTIONAL_TARGET_ROW", "5")))
+        self._directional_target_col = int(cfg.get("directional_target_col",
+                                                    os.getenv("DIRECTIONAL_TARGET_COL", "12")))
+        self._directional_target_scale = float(cfg.get("directional_target_scale", "1.0"))
+        self._min_target_distance = 999
         self._prev_exit_dist = 0
+
+        # Structured directives from the LLM reward advisor — processed as
+        # one-time bonuses or per-step penalties based on area/action conditions.
+        self._directives = cfg.get("directives", [])
+        self._triggered_directives: set[str] = set()
 
         # Area-based exploration boost — multiplies coverage reward by
         # active_group to guide exploration toward key progression areas.
@@ -185,8 +196,8 @@ class RewardWrapper(gym.Wrapper):
 
         self._rnd = RNDCuriosity() if enable_rnd else None
 
-        # Potential-based shaping from RLAIF reward model
-        self._shaping = PotentialShaping(lam=0.01) if enable_shaping else None
+        # Potential-based shaping from RLAIF reward model (lambda decays with epoch)
+        self._shaping = PotentialShaping(lam=0.01, epoch=epoch) if enable_shaping else None
         self._reward_model = None
         if enable_shaping and reward_model_path:
             self._load_reward_model(reward_model_path)
@@ -347,7 +358,15 @@ class RewardWrapper(gym.Wrapper):
         self._start_room_id = info.get("room_id", 0)
         self._start_group = info.get("active_group", 0)
         self._max_distance_achieved = 0
-        self._max_directional_progress = 0
+
+        # Initialize min target distance from starting position
+        start_row = self._start_room_id // 16
+        start_col = self._start_room_id % 16
+        self._min_target_distance = (abs(start_row - self._directional_target_row) +
+                                     abs(start_col - self._directional_target_col))
+
+        # Reset triggered directives for new episode
+        self._triggered_directives.clear()
 
         # Log starting position once per epoch for debugging
         if not hasattr(self, "_logged_start"):
@@ -661,6 +680,35 @@ class RewardWrapper(gym.Wrapper):
                 )
             self._prev_maku_stage = maku_stage
 
+        # --- LLM Advisor Directives ---
+        # Process structured directives from the reward advisor:
+        #   seek_room: one-time bonus when entering a target area group
+        #   trigger_action: one-time bonus for performing a specific action
+        #   avoid_region: per-step penalty for being in an undesirable area
+        for directive in self._directives:
+            dtype = directive.get("type")
+            if dtype == "seek_room":
+                tgt_group = directive.get("target_group")
+                bonus = directive.get("bonus", 0)
+                key = f"seek_{tgt_group}"
+                if (tgt_group is not None and active_group == tgt_group
+                        and key not in self._triggered_directives):
+                    reward += bonus
+                    self._triggered_directives.add(key)
+                    logger.info("DIRECTIVE: seek_room group=%d triggered (+%.1f)", tgt_group, bonus)
+            elif dtype == "trigger_action":
+                condition = directive.get("condition", "")
+                bonus = directive.get("bonus", 0)
+                if condition == "dialog_in_group_2" and dialog_active and active_group == 2:
+                    if "dialog_g2" not in self._triggered_directives:
+                        reward += bonus
+                        self._triggered_directives.add("dialog_g2")
+                        logger.info("DIRECTIVE: dialog_in_group_2 triggered (+%.1f)", bonus)
+            elif dtype == "avoid_region":
+                tgt_group = directive.get("target_group")
+                if tgt_group is not None and active_group == tgt_group:
+                    reward += directive.get("bonus", 0)  # negative for penalties
+
         # --- Menu management ---
         # Allow brief menu access for item switching, but suppress exploration
         # rewards while menu is open and penalize camping
@@ -757,13 +805,15 @@ class RewardWrapper(gym.Wrapper):
                 reward += delta * self._distance_bonus
                 self._max_distance_achieved = manhattan
 
-            # Directional bonus — one-time reward per new eastward column.
-            # Maku Tree (primary quest objective) is east of the starting area.
-            east_progress = cur_col - start_col
-            if east_progress > self._max_directional_progress:
-                delta = east_progress - self._max_directional_progress
-                reward += delta * self._directional_bonus
-                self._max_directional_progress = east_progress
+            # Directional bonus — one-time reward per new minimum Manhattan
+            # distance toward the target room.  Target is configurable by the
+            # LLM reward advisor (default: Maku Tree at row=5, col=12).
+            target_dist = (abs(cur_row - self._directional_target_row) +
+                          abs(cur_col - self._directional_target_col))
+            if target_dist < self._min_target_distance:
+                delta = self._min_target_distance - target_dist
+                reward += delta * self._directional_bonus * self._directional_target_scale
+                self._min_target_distance = target_dist
 
         # --- Potential-based shaping ---
         if self._shaping is not None and self._reward_model is not None:

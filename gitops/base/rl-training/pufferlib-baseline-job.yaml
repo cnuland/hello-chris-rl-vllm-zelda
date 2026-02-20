@@ -74,7 +74,7 @@ spec:
         - name: GOD_MODE_EPOCHS
           value: "12"
         - name: STAGNATION_LIMIT
-          value: "5000"
+          value: "3000"
         - name: NUM_STEPS
           value: "256"
         - name: TIME_PENALTY
@@ -93,9 +93,14 @@ spec:
           value: "0.1"
         - name: GAMMA
           value: "0.998"
-        # Evaluation — skip LLM judges for baseline, just measure exploration
+        # Directional target — Maku Tree area (default, advisor can override)
+        - name: DIRECTIONAL_TARGET_ROW
+          value: "5"
+        - name: DIRECTIONAL_TARGET_COL
+          value: "12"
+        # Evaluation — phase-aware LLM judges + reward advisor
         - name: RUN_EVAL
-          value: "false"
+          value: "true"
         - name: CLEAN_START
           value: "true"
         - name: REWARD_MODEL_PATH

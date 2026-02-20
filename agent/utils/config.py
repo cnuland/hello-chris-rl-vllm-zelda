@@ -38,8 +38,15 @@ class RewardConfig(BaseModel):
     indoor_entry: float = 5.0
     dungeon_floor: float = 2.0
     dialog_bonus: float = 3.0
-    maku_dialog: float = 30.0
-    gnarled_key: float = 30.0
+    maku_dialog: float = 100.0
+    gnarled_key: float = 100.0
+    maku_seed: float = 200.0
+    gate_slash: float = 50.0
+    maku_room: float = 15.0
+    maku_stage: float = 75.0
+    distance_bonus: float = 5.0
+    directional_bonus: float = 10.0
+    wall_collision: float = -0.01
     area_boost_overworld: float = 1.0
     area_boost_subrosia: float = 1.5
     area_boost_maku: float = 3.0

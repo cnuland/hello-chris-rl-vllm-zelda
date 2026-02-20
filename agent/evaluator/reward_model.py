@@ -61,15 +61,26 @@ class RewardModel:
             x = torch.from_numpy(obs).float().unsqueeze(0)
             return self._net(x).item()
 
+    def state_dict(self):
+        """Return model state dict (for EMA blending)."""
+        self._lazy_init()
+        import copy
+        return copy.deepcopy(self._net.state_dict())
+
     def train_on_preferences(
         self, prefs: list[tuple[np.ndarray, np.ndarray, float]],
         n_epochs: int = 5,
+        ema_alpha: float = 1.0,
+        prev_state_dict: dict | None = None,
     ) -> float:
-        """Train on pairwise preferences with multiple epochs.
+        """Train on pairwise preferences with EMA blending and validation.
 
         Args:
             prefs: List of (obs_a, obs_b, label) where label=1 means a>b, 0 means b>a.
             n_epochs: Number of training passes over the data.
+            ema_alpha: Blending weight for new model (0.0-1.0).
+                       1.0 = fully new, 0.3 = 30% new + 70% old.
+            prev_state_dict: Previous epoch's model state for EMA blending.
 
         Returns:
             Average training loss from the final epoch.
@@ -83,11 +94,23 @@ class RewardModel:
         import torch
         import torch.nn.functional as F
 
+        # Split into train/validation (80/20) for quality check
+        shuffled_all = list(prefs)
+        random.shuffle(shuffled_all)
+        split_idx = max(1, int(len(shuffled_all) * 0.8))
+        train_prefs = shuffled_all[:split_idx]
+        val_prefs = shuffled_all[split_idx:]
+
+        logger.info(
+            "Reward model training: %d train pairs, %d validation pairs",
+            len(train_prefs), len(val_prefs),
+        )
+
         final_loss = 0.0
         for epoch in range(n_epochs):
             self._net.train()
             epoch_loss = 0.0
-            shuffled = list(prefs)
+            shuffled = list(train_prefs)
             random.shuffle(shuffled)
             for obs_a, obs_b, label in shuffled:
                 a = torch.from_numpy(obs_a).float().unsqueeze(0)
@@ -105,8 +128,47 @@ class RewardModel:
                 self._optimizer.step()
                 epoch_loss += loss.item()
 
-            final_loss = epoch_loss / len(prefs)
+            final_loss = epoch_loss / len(train_prefs)
             logger.info("Reward model epoch %d/%d loss: %.4f", epoch + 1, n_epochs, final_loss)
+
+        # Validation accuracy check — reject model if it can't beat random
+        if val_prefs:
+            self._net.eval()
+            correct = 0
+            with torch.no_grad():
+                for obs_a, obs_b, label in val_prefs:
+                    a = torch.from_numpy(obs_a).float().unsqueeze(0)
+                    b = torch.from_numpy(obs_b).float().unsqueeze(0)
+                    r_a = self._net(a).item()
+                    r_b = self._net(b).item()
+                    pred = 1.0 if r_a > r_b else 0.0
+                    if pred == label:
+                        correct += 1
+            val_accuracy = correct / len(val_prefs)
+            logger.info("Reward model validation accuracy: %.1f%% (%d/%d)",
+                        val_accuracy * 100, correct, len(val_prefs))
+
+            if val_accuracy < 0.55 and prev_state_dict is not None:
+                logger.warning(
+                    "Validation accuracy %.1f%% < 55%% — rolling back to previous model",
+                    val_accuracy * 100,
+                )
+                self._net.load_state_dict(prev_state_dict)
+                self._net.eval()
+                return final_loss
+
+        # EMA blending: blend new weights with previous epoch's weights
+        # to prevent catastrophic drift from noisy preference batches
+        if prev_state_dict is not None and ema_alpha < 1.0:
+            current_sd = self._net.state_dict()
+            blended = {}
+            for k in current_sd:
+                if k in prev_state_dict:
+                    blended[k] = ema_alpha * current_sd[k] + (1 - ema_alpha) * prev_state_dict[k]
+                else:
+                    blended[k] = current_sd[k]
+            self._net.load_state_dict(blended)
+            logger.info("Applied EMA blending (alpha=%.2f) with previous model", ema_alpha)
 
         self._net.eval()
         return final_loss

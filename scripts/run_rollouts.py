@@ -515,8 +515,14 @@ def _upload_checkpoint(epoch, metadata, best_checkpoint):
         logger.warning("Could not upload metadata to MinIO: %s", e)
 
 
-def run_evaluation(epoch):
-    """Run LLM judge evaluation on episode segments."""
+def run_evaluation(epoch, milestones=None, weight_overrides=None):
+    """Run LLM judge evaluation on episode segments.
+
+    Args:
+        epoch: Current epoch number.
+        milestones: Epoch milestone dict for phase detection.
+        weight_overrides: Rubric weight overrides from the reward advisor.
+    """
     logger.info("=== EPOCH %d EVALUATION ===", epoch)
 
     try:
@@ -537,6 +543,8 @@ def run_evaluation(epoch):
             episodes_bucket="zelda-episodes",
             consistency_m=1,
             walkthrough_path=walkthrough_path if os.path.exists(walkthrough_path) else None,
+            milestones=milestones,
+            weight_overrides=weight_overrides,
         )
 
         # List only current epoch's segment manifests
@@ -563,7 +571,7 @@ def run_evaluation(epoch):
         scores_key = f"scores/epoch_{epoch}/scores.jsonl"
         evaluator.write_scores(results, output_key=scores_key)
 
-        # Train reward model on pairwise preferences
+        # Train reward model on pairwise preferences (with EMA + validation)
         if len(results) >= 2:
             logger.info(
                 "Training reward model on %d scored segments...", len(results)
@@ -571,6 +579,7 @@ def run_evaluation(epoch):
             prefs = build_preferences(results)
             if prefs:
                 rm = RewardModel()
+                prev_state_dict = None
 
                 # Load previous epoch's model if exists
                 if epoch > 0:
@@ -584,11 +593,17 @@ def run_evaluation(epoch):
                         ) as f:
                             f.write(rm_data)
                             rm.load(f.name)
-                        logger.info("Loaded reward model from epoch %d", epoch - 1)
+                        # Save pre-training state for EMA blending
+                        prev_state_dict = rm.state_dict()
+                        logger.info("Loaded reward model from epoch %d (will EMA blend)", epoch - 1)
                     except Exception as e:
                         logger.info("No previous reward model: %s", e)
 
-                avg_loss = rm.train_on_preferences(prefs)
+                avg_loss = rm.train_on_preferences(
+                    prefs,
+                    ema_alpha=0.3,
+                    prev_state_dict=prev_state_dict,
+                )
                 logger.info(
                     "Reward model loss: %.4f (%d pairs)", avg_loss, len(prefs)
                 )
@@ -671,6 +686,12 @@ def download_reward_model(epoch):
 def run_reward_advisor(epoch: int, epoch_metadata: dict) -> dict | None:
     """Run the LLM reward advisor to adjust reward weights for the next epoch.
 
+    Returns an updated reward config dict that includes:
+    - Multiplied reward parameters
+    - Directional target (row, col, scale) for spatial guidance
+    - Structured directives (seek_room, trigger_action, avoid_region)
+    - Weight adjustments for the next judge evaluation pass (_weight_adjustments)
+
     Args:
         epoch: Current epoch number (just completed).
         epoch_metadata: Training metadata dict with reward_mean, milestones, etc.
@@ -686,6 +707,8 @@ def run_reward_advisor(epoch: int, epoch_metadata: dict) -> dict | None:
     logger.info("=== EPOCH %d REWARD ADVISOR ===", epoch)
 
     try:
+        from dataclasses import asdict
+
         from agent.evaluator.reward_advisor import RewardAdvisor
         from agent.planner.llm_client import LLMClient
         from agent.utils.config import RewardConfig, S3Config
@@ -717,32 +740,69 @@ def run_reward_advisor(epoch: int, epoch_metadata: dict) -> dict | None:
         except Exception as e:
             logger.info("Could not load segment scores for advisor: %s", e)
 
-        # Get multipliers from LLM
-        multipliers = advisor.advise(epoch_metadata, segment_summaries)
+        # Get full advisor output (multipliers + directional target + directives)
+        output = advisor.advise(epoch_metadata, segment_summaries)
 
-        if not multipliers:
-            logger.info("Advisor returned no multipliers — keeping defaults")
+        if not output.multipliers and not output.directional_target and not output.directives:
+            logger.info("Advisor returned empty output — keeping defaults")
             llm.close()
             return None
 
         # Apply multipliers to base config
         base = RewardConfig().model_dump()
-        updated = advisor.apply_multipliers(base, multipliers)
+        updated = advisor.apply_multipliers(base, output.multipliers)
 
-        # Upload advice to MinIO for auditing
+        # Inject directional target into config (consumed by RewardWrapper)
+        if output.directional_target:
+            updated["directional_target_row"] = output.directional_target.row
+            updated["directional_target_col"] = output.directional_target.col
+            updated["directional_target_scale"] = output.directional_target.scale
+            logger.info(
+                "Advisor directional target: row=%d, col=%d, scale=%.1f (%s)",
+                output.directional_target.row,
+                output.directional_target.col,
+                output.directional_target.scale,
+                output.directional_target.rationale,
+            )
+
+        # Inject directives into config (consumed by RewardWrapper)
+        if output.directives:
+            updated["directives"] = [asdict(d) for d in output.directives]
+            logger.info(
+                "Advisor directives: %d active — %s",
+                len(output.directives),
+                [d.type for d in output.directives],
+            )
+
+        # Store weight adjustments for the next evaluation pass
+        # (consumed by run_evaluation on the next epoch)
+        if output.weight_adjustments:
+            updated["_weight_adjustments"] = output.weight_adjustments
+            logger.info(
+                "Advisor weight adjustments: %s",
+                {k: f"{v:.2f}" for k, v in output.weight_adjustments.items()},
+            )
+
+        # Upload expanded advice to MinIO for auditing
         try:
             s3 = S3Client(S3Config())
             advice_data = {
                 "epoch": epoch,
-                "multipliers": multipliers,
+                "phase": output.rationale.split(".")[0] if output.rationale else "",
+                "multipliers": output.multipliers,
+                "directional_target": asdict(output.directional_target) if output.directional_target else None,
+                "directives": [asdict(d) for d in output.directives],
+                "weight_adjustments": output.weight_adjustments,
+                "rationale": output.rationale,
                 "base_config": RewardConfig().model_dump(),
-                "updated_config": updated,
+                "updated_config": {k: v for k, v in updated.items()
+                                   if not k.startswith("_")},
                 "epoch_stats": epoch_metadata,
             }
             s3.upload_bytes(
                 "zelda-models",
                 f"advice/epoch_{epoch}/advice.json",
-                json.dumps(advice_data, indent=2).encode(),
+                json.dumps(advice_data, indent=2, default=str).encode(),
             )
             logger.info("Saved reward advice to MinIO: advice/epoch_%d/advice.json", epoch)
         except Exception as e:
@@ -750,7 +810,10 @@ def run_reward_advisor(epoch: int, epoch_metadata: dict) -> dict | None:
 
         llm.close()
 
-        logger.info("Reward advisor complete — %d parameters adjusted", len(multipliers))
+        logger.info("Reward advisor complete — %d multipliers, target=%s, %d directives",
+                     len(output.multipliers),
+                     f"({output.directional_target.row},{output.directional_target.col})" if output.directional_target else "none",
+                     len(output.directives))
         return updated
 
     except Exception as e:
@@ -835,6 +898,7 @@ def main():
     global_best_checkpoint = prev_checkpoint
     global_best_mean = -float("inf")
     reward_config = None  # LLM advisor will populate after first epoch
+    weight_overrides = None  # Rubric weight adjustments from advisor
 
     for epoch in range(start_epoch, start_epoch + max_epochs):
         logger.info("=" * 60)
@@ -877,16 +941,7 @@ def main():
 
         # Phase 2: Evaluation + reward model
         if run_eval:
-            run_evaluation(epoch)
-
-            # Phase 3: Download reward model for next epoch
-            rm_path = download_reward_model(epoch)
-            if rm_path:
-                logger.info("Next epoch will use reward model shaping")
-            else:
-                logger.info("Next epoch runs without shaping")
-
-            # Phase 3b: LLM reward advisor — adjust reward weights for next epoch
+            # Load milestones from epoch metadata for phase detection
             epoch_metadata = {}
             metadata_path = os.path.join("/tmp", f"epoch_{epoch}_metadata.json")
             try:
@@ -896,10 +951,27 @@ def main():
                 logger.warning("Could not load epoch metadata: %s", e)
                 epoch_metadata = {"epoch": epoch, "reward_mean": mean_reward}
 
+            milestones = epoch_metadata.get("milestones", {})
+
+            # Run phase-aware evaluation with milestones and weight overrides
+            run_evaluation(epoch, milestones=milestones, weight_overrides=weight_overrides)
+
+            # Phase 3: Download reward model for next epoch
+            rm_path = download_reward_model(epoch)
+            if rm_path:
+                logger.info("Next epoch will use reward model shaping")
+            else:
+                logger.info("Next epoch runs without shaping")
+
+            # Phase 3b: LLM reward advisor — adjust reward weights for next epoch
             advised_config = run_reward_advisor(epoch, epoch_metadata)
             if advised_config:
+                # Extract weight adjustments for next evaluation pass
+                weight_overrides = advised_config.pop("_weight_adjustments", None)
                 reward_config = advised_config
                 logger.info("Next epoch will use LLM-adjusted reward config")
+                if weight_overrides:
+                    logger.info("Next epoch evaluation will use advisor weight overrides")
             else:
                 logger.info("Next epoch keeps current reward config")
 
