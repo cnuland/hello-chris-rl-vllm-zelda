@@ -1,0 +1,13 @@
+{
+  "name": "zelda-oos-map-ws-relay",
+  "version": "1.0.0",
+  "description": "WebSocket relay server for Oracle of Seasons RL map visualization. Inspired by LinkMapViz (https://github.com/Xe-Xo/LinkMapViz)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "express-ws": "^5.0.2"
+  }
+}

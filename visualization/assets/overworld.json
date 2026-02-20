@@ -1,0 +1,1300 @@
+{
+  "group": 0,
+  "group_name": "Overworld",
+  "season": null,
+  "season_name": "default",
+  "grid_cols": 16,
+  "grid_rows": 16,
+  "room_width_px": 160,
+  "room_height_px": 128,
+  "total_width_px": 2560,
+  "total_height_px": 2048,
+  "tiles_per_room_x": 10,
+  "tiles_per_room_y": 8,
+  "tile_size_px": 16,
+  "success_count": 256,
+  "fail_count": 0,
+  "elapsed_seconds": 5.9,
+  "rooms": {
+    "0": {
+      "status": "ok",
+      "row": 0,
+      "col": 0
+    },
+    "1": {
+      "status": "ok",
+      "row": 0,
+      "col": 1
+    },
+    "2": {
+      "status": "ok",
+      "row": 0,
+      "col": 2
+    },
+    "3": {
+      "status": "ok",
+      "row": 0,
+      "col": 3
+    },
+    "4": {
+      "status": "ok",
+      "row": 0,
+      "col": 4
+    },
+    "5": {
+      "status": "ok",
+      "row": 0,
+      "col": 5
+    },
+    "6": {
+      "status": "ok",
+      "row": 0,
+      "col": 6
+    },
+    "7": {
+      "status": "ok",
+      "row": 0,
+      "col": 7
+    },
+    "8": {
+      "status": "ok",
+      "row": 0,
+      "col": 8
+    },
+    "9": {
+      "status": "ok",
+      "row": 0,
+      "col": 9
+    },
+    "10": {
+      "status": "ok",
+      "row": 0,
+      "col": 10
+    },
+    "11": {
+      "status": "ok",
+      "row": 0,
+      "col": 11
+    },
+    "12": {
+      "status": "ok",
+      "row": 0,
+      "col": 12
+    },
+    "13": {
+      "status": "ok",
+      "row": 0,
+      "col": 13
+    },
+    "14": {
+      "status": "ok",
+      "row": 0,
+      "col": 14
+    },
+    "15": {
+      "status": "ok",
+      "row": 0,
+      "col": 15
+    },
+    "16": {
+      "status": "ok",
+      "row": 1,
+      "col": 0
+    },
+    "17": {
+      "status": "ok",
+      "row": 1,
+      "col": 1
+    },
+    "18": {
+      "status": "ok",
+      "row": 1,
+      "col": 2
+    },
+    "19": {
+      "status": "ok",
+      "row": 1,
+      "col": 3
+    },
+    "20": {
+      "status": "ok",
+      "row": 1,
+      "col": 4
+    },
+    "21": {
+      "status": "ok",
+      "row": 1,
+      "col": 5
+    },
+    "22": {
+      "status": "ok",
+      "row": 1,
+      "col": 6
+    },
+    "23": {
+      "status": "ok",
+      "row": 1,
+      "col": 7
+    },
+    "24": {
+      "status": "ok",
+      "row": 1,
+      "col": 8
+    },
+    "25": {
+      "status": "ok",
+      "row": 1,
+      "col": 9
+    },
+    "26": {
+      "status": "ok",
+      "row": 1,
+      "col": 10
+    },
+    "27": {
+      "status": "ok",
+      "row": 1,
+      "col": 11
+    },
+    "28": {
+      "status": "ok",
+      "row": 1,
+      "col": 12
+    },
+    "29": {
+      "status": "ok",
+      "row": 1,
+      "col": 13
+    },
+    "30": {
+      "status": "ok",
+      "row": 1,
+      "col": 14
+    },
+    "31": {
+      "status": "ok",
+      "row": 1,
+      "col": 15
+    },
+    "32": {
+      "status": "ok",
+      "row": 2,
+      "col": 0
+    },
+    "33": {
+      "status": "ok",
+      "row": 2,
+      "col": 1
+    },
+    "34": {
+      "status": "ok",
+      "row": 2,
+      "col": 2
+    },
+    "35": {
+      "status": "ok",
+      "row": 2,
+      "col": 3
+    },
+    "36": {
+      "status": "ok",
+      "row": 2,
+      "col": 4
+    },
+    "37": {
+      "status": "ok",
+      "row": 2,
+      "col": 5
+    },
+    "38": {
+      "status": "ok",
+      "row": 2,
+      "col": 6
+    },
+    "39": {
+      "status": "ok",
+      "row": 2,
+      "col": 7
+    },
+    "40": {
+      "status": "ok",
+      "row": 2,
+      "col": 8
+    },
+    "41": {
+      "status": "ok",
+      "row": 2,
+      "col": 9
+    },
+    "42": {
+      "status": "ok",
+      "row": 2,
+      "col": 10
+    },
+    "43": {
+      "status": "ok",
+      "row": 2,
+      "col": 11
+    },
+    "44": {
+      "status": "ok",
+      "row": 2,
+      "col": 12
+    },
+    "45": {
+      "status": "ok",
+      "row": 2,
+      "col": 13
+    },
+    "46": {
+      "status": "ok",
+      "row": 2,
+      "col": 14
+    },
+    "47": {
+      "status": "ok",
+      "row": 2,
+      "col": 15
+    },
+    "48": {
+      "status": "ok",
+      "row": 3,
+      "col": 0
+    },
+    "49": {
+      "status": "ok",
+      "row": 3,
+      "col": 1
+    },
+    "50": {
+      "status": "ok",
+      "row": 3,
+      "col": 2
+    },
+    "51": {
+      "status": "ok",
+      "row": 3,
+      "col": 3
+    },
+    "52": {
+      "status": "ok",
+      "row": 3,
+      "col": 4
+    },
+    "53": {
+      "status": "ok",
+      "row": 3,
+      "col": 5
+    },
+    "54": {
+      "status": "ok",
+      "row": 3,
+      "col": 6
+    },
+    "55": {
+      "status": "ok",
+      "row": 3,
+      "col": 7
+    },
+    "56": {
+      "status": "ok",
+      "row": 3,
+      "col": 8
+    },
+    "57": {
+      "status": "ok",
+      "row": 3,
+      "col": 9
+    },
+    "58": {
+      "status": "ok",
+      "row": 3,
+      "col": 10
+    },
+    "59": {
+      "status": "ok",
+      "row": 3,
+      "col": 11
+    },
+    "60": {
+      "status": "ok",
+      "row": 3,
+      "col": 12
+    },
+    "61": {
+      "status": "ok",
+      "row": 3,
+      "col": 13
+    },
+    "62": {
+      "status": "ok",
+      "row": 3,
+      "col": 14
+    },
+    "63": {
+      "status": "ok",
+      "row": 3,
+      "col": 15
+    },
+    "64": {
+      "status": "ok",
+      "row": 4,
+      "col": 0
+    },
+    "65": {
+      "status": "ok",
+      "row": 4,
+      "col": 1
+    },
+    "66": {
+      "status": "ok",
+      "row": 4,
+      "col": 2
+    },
+    "67": {
+      "status": "ok",
+      "row": 4,
+      "col": 3
+    },
+    "68": {
+      "status": "ok",
+      "row": 4,
+      "col": 4
+    },
+    "69": {
+      "status": "ok",
+      "row": 4,
+      "col": 5
+    },
+    "70": {
+      "status": "ok",
+      "row": 4,
+      "col": 6
+    },
+    "71": {
+      "status": "ok",
+      "row": 4,
+      "col": 7
+    },
+    "72": {
+      "status": "ok",
+      "row": 4,
+      "col": 8
+    },
+    "73": {
+      "status": "ok",
+      "row": 4,
+      "col": 9
+    },
+    "74": {
+      "status": "ok",
+      "row": 4,
+      "col": 10
+    },
+    "75": {
+      "status": "ok",
+      "row": 4,
+      "col": 11
+    },
+    "76": {
+      "status": "ok",
+      "row": 4,
+      "col": 12
+    },
+    "77": {
+      "status": "ok",
+      "row": 4,
+      "col": 13
+    },
+    "78": {
+      "status": "ok",
+      "row": 4,
+      "col": 14
+    },
+    "79": {
+      "status": "ok",
+      "row": 4,
+      "col": 15
+    },
+    "80": {
+      "status": "ok",
+      "row": 5,
+      "col": 0
+    },
+    "81": {
+      "status": "ok",
+      "row": 5,
+      "col": 1
+    },
+    "82": {
+      "status": "ok",
+      "row": 5,
+      "col": 2
+    },
+    "83": {
+      "status": "ok",
+      "row": 5,
+      "col": 3
+    },
+    "84": {
+      "status": "ok",
+      "row": 5,
+      "col": 4
+    },
+    "85": {
+      "status": "ok",
+      "row": 5,
+      "col": 5
+    },
+    "86": {
+      "status": "ok",
+      "row": 5,
+      "col": 6
+    },
+    "87": {
+      "status": "ok",
+      "row": 5,
+      "col": 7
+    },
+    "88": {
+      "status": "ok",
+      "row": 5,
+      "col": 8
+    },
+    "89": {
+      "status": "ok",
+      "row": 5,
+      "col": 9
+    },
+    "90": {
+      "status": "ok",
+      "row": 5,
+      "col": 10
+    },
+    "91": {
+      "status": "ok",
+      "row": 5,
+      "col": 11
+    },
+    "92": {
+      "status": "ok",
+      "row": 5,
+      "col": 12
+    },
+    "93": {
+      "status": "ok",
+      "row": 5,
+      "col": 13
+    },
+    "94": {
+      "status": "ok",
+      "row": 5,
+      "col": 14
+    },
+    "95": {
+      "status": "ok",
+      "row": 5,
+      "col": 15
+    },
+    "96": {
+      "status": "ok",
+      "row": 6,
+      "col": 0
+    },
+    "97": {
+      "status": "ok",
+      "row": 6,
+      "col": 1
+    },
+    "98": {
+      "status": "ok",
+      "row": 6,
+      "col": 2
+    },
+    "99": {
+      "status": "ok",
+      "row": 6,
+      "col": 3
+    },
+    "100": {
+      "status": "ok",
+      "row": 6,
+      "col": 4
+    },
+    "101": {
+      "status": "ok",
+      "row": 6,
+      "col": 5
+    },
+    "102": {
+      "status": "ok",
+      "row": 6,
+      "col": 6
+    },
+    "103": {
+      "status": "ok",
+      "row": 6,
+      "col": 7
+    },
+    "104": {
+      "status": "ok",
+      "row": 6,
+      "col": 8
+    },
+    "105": {
+      "status": "ok",
+      "row": 6,
+      "col": 9
+    },
+    "106": {
+      "status": "ok",
+      "row": 6,
+      "col": 10
+    },
+    "107": {
+      "status": "ok",
+      "row": 6,
+      "col": 11
+    },
+    "108": {
+      "status": "ok",
+      "row": 6,
+      "col": 12
+    },
+    "109": {
+      "status": "ok",
+      "row": 6,
+      "col": 13
+    },
+    "110": {
+      "status": "ok",
+      "row": 6,
+      "col": 14
+    },
+    "111": {
+      "status": "ok",
+      "row": 6,
+      "col": 15
+    },
+    "112": {
+      "status": "ok",
+      "row": 7,
+      "col": 0
+    },
+    "113": {
+      "status": "ok",
+      "row": 7,
+      "col": 1
+    },
+    "114": {
+      "status": "ok",
+      "row": 7,
+      "col": 2
+    },
+    "115": {
+      "status": "ok",
+      "row": 7,
+      "col": 3
+    },
+    "116": {
+      "status": "ok",
+      "row": 7,
+      "col": 4
+    },
+    "117": {
+      "status": "ok",
+      "row": 7,
+      "col": 5
+    },
+    "118": {
+      "status": "ok",
+      "row": 7,
+      "col": 6
+    },
+    "119": {
+      "status": "ok",
+      "row": 7,
+      "col": 7
+    },
+    "120": {
+      "status": "ok",
+      "row": 7,
+      "col": 8
+    },
+    "121": {
+      "status": "ok",
+      "row": 7,
+      "col": 9
+    },
+    "122": {
+      "status": "ok",
+      "row": 7,
+      "col": 10
+    },
+    "123": {
+      "status": "ok",
+      "row": 7,
+      "col": 11
+    },
+    "124": {
+      "status": "ok",
+      "row": 7,
+      "col": 12
+    },
+    "125": {
+      "status": "ok",
+      "row": 7,
+      "col": 13
+    },
+    "126": {
+      "status": "ok",
+      "row": 7,
+      "col": 14
+    },
+    "127": {
+      "status": "ok",
+      "row": 7,
+      "col": 15
+    },
+    "128": {
+      "status": "ok",
+      "row": 8,
+      "col": 0
+    },
+    "129": {
+      "status": "ok",
+      "row": 8,
+      "col": 1
+    },
+    "130": {
+      "status": "ok",
+      "row": 8,
+      "col": 2
+    },
+    "131": {
+      "status": "ok",
+      "row": 8,
+      "col": 3
+    },
+    "132": {
+      "status": "ok",
+      "row": 8,
+      "col": 4
+    },
+    "133": {
+      "status": "ok",
+      "row": 8,
+      "col": 5
+    },
+    "134": {
+      "status": "ok",
+      "row": 8,
+      "col": 6
+    },
+    "135": {
+      "status": "ok",
+      "row": 8,
+      "col": 7
+    },
+    "136": {
+      "status": "ok",
+      "row": 8,
+      "col": 8
+    },
+    "137": {
+      "status": "ok",
+      "row": 8,
+      "col": 9
+    },
+    "138": {
+      "status": "ok",
+      "row": 8,
+      "col": 10
+    },
+    "139": {
+      "status": "ok",
+      "row": 8,
+      "col": 11
+    },
+    "140": {
+      "status": "ok",
+      "row": 8,
+      "col": 12
+    },
+    "141": {
+      "status": "ok",
+      "row": 8,
+      "col": 13
+    },
+    "142": {
+      "status": "ok",
+      "row": 8,
+      "col": 14
+    },
+    "143": {
+      "status": "ok",
+      "row": 8,
+      "col": 15
+    },
+    "144": {
+      "status": "ok",
+      "row": 9,
+      "col": 0
+    },
+    "145": {
+      "status": "ok",
+      "row": 9,
+      "col": 1
+    },
+    "146": {
+      "status": "ok",
+      "row": 9,
+      "col": 2
+    },
+    "147": {
+      "status": "ok",
+      "row": 9,
+      "col": 3
+    },
+    "148": {
+      "status": "ok",
+      "row": 9,
+      "col": 4
+    },
+    "149": {
+      "status": "ok",
+      "row": 9,
+      "col": 5
+    },
+    "150": {
+      "status": "ok",
+      "row": 9,
+      "col": 6
+    },
+    "151": {
+      "status": "ok",
+      "row": 9,
+      "col": 7
+    },
+    "152": {
+      "status": "ok",
+      "row": 9,
+      "col": 8
+    },
+    "153": {
+      "status": "ok",
+      "row": 9,
+      "col": 9
+    },
+    "154": {
+      "status": "ok",
+      "row": 9,
+      "col": 10
+    },
+    "155": {
+      "status": "ok",
+      "row": 9,
+      "col": 11
+    },
+    "156": {
+      "status": "ok",
+      "row": 9,
+      "col": 12
+    },
+    "157": {
+      "status": "ok",
+      "row": 9,
+      "col": 13
+    },
+    "158": {
+      "status": "ok",
+      "row": 9,
+      "col": 14
+    },
+    "159": {
+      "status": "ok",
+      "row": 9,
+      "col": 15
+    },
+    "160": {
+      "status": "ok",
+      "row": 10,
+      "col": 0
+    },
+    "161": {
+      "status": "ok",
+      "row": 10,
+      "col": 1
+    },
+    "162": {
+      "status": "ok",
+      "row": 10,
+      "col": 2
+    },
+    "163": {
+      "status": "ok",
+      "row": 10,
+      "col": 3
+    },
+    "164": {
+      "status": "ok",
+      "row": 10,
+      "col": 4
+    },
+    "165": {
+      "status": "ok",
+      "row": 10,
+      "col": 5
+    },
+    "166": {
+      "status": "ok",
+      "row": 10,
+      "col": 6
+    },
+    "167": {
+      "status": "ok",
+      "row": 10,
+      "col": 7
+    },
+    "168": {
+      "status": "ok",
+      "row": 10,
+      "col": 8
+    },
+    "169": {
+      "status": "ok",
+      "row": 10,
+      "col": 9
+    },
+    "170": {
+      "status": "ok",
+      "row": 10,
+      "col": 10
+    },
+    "171": {
+      "status": "ok",
+      "row": 10,
+      "col": 11
+    },
+    "172": {
+      "status": "ok",
+      "row": 10,
+      "col": 12
+    },
+    "173": {
+      "status": "ok",
+      "row": 10,
+      "col": 13
+    },
+    "174": {
+      "status": "ok",
+      "row": 10,
+      "col": 14
+    },
+    "175": {
+      "status": "ok",
+      "row": 10,
+      "col": 15
+    },
+    "176": {
+      "status": "ok",
+      "row": 11,
+      "col": 0
+    },
+    "177": {
+      "status": "ok",
+      "row": 11,
+      "col": 1
+    },
+    "178": {
+      "status": "ok",
+      "row": 11,
+      "col": 2
+    },
+    "179": {
+      "status": "ok",
+      "row": 11,
+      "col": 3
+    },
+    "180": {
+      "status": "ok",
+      "row": 11,
+      "col": 4
+    },
+    "181": {
+      "status": "ok",
+      "row": 11,
+      "col": 5
+    },
+    "182": {
+      "status": "ok",
+      "row": 11,
+      "col": 6
+    },
+    "183": {
+      "status": "ok",
+      "row": 11,
+      "col": 7
+    },
+    "184": {
+      "status": "ok",
+      "row": 11,
+      "col": 8
+    },
+    "185": {
+      "status": "ok",
+      "row": 11,
+      "col": 9
+    },
+    "186": {
+      "status": "ok",
+      "row": 11,
+      "col": 10
+    },
+    "187": {
+      "status": "ok",
+      "row": 11,
+      "col": 11
+    },
+    "188": {
+      "status": "ok",
+      "row": 11,
+      "col": 12
+    },
+    "189": {
+      "status": "ok",
+      "row": 11,
+      "col": 13
+    },
+    "190": {
+      "status": "ok",
+      "row": 11,
+      "col": 14
+    },
+    "191": {
+      "status": "ok",
+      "row": 11,
+      "col": 15
+    },
+    "192": {
+      "status": "ok",
+      "row": 12,
+      "col": 0
+    },
+    "193": {
+      "status": "ok",
+      "row": 12,
+      "col": 1
+    },
+    "194": {
+      "status": "ok",
+      "row": 12,
+      "col": 2
+    },
+    "195": {
+      "status": "ok",
+      "row": 12,
+      "col": 3
+    },
+    "196": {
+      "status": "ok",
+      "row": 12,
+      "col": 4
+    },
+    "197": {
+      "status": "ok",
+      "row": 12,
+      "col": 5
+    },
+    "198": {
+      "status": "ok",
+      "row": 12,
+      "col": 6
+    },
+    "199": {
+      "status": "ok",
+      "row": 12,
+      "col": 7
+    },
+    "200": {
+      "status": "ok",
+      "row": 12,
+      "col": 8
+    },
+    "201": {
+      "status": "ok",
+      "row": 12,
+      "col": 9
+    },
+    "202": {
+      "status": "ok",
+      "row": 12,
+      "col": 10
+    },
+    "203": {
+      "status": "ok",
+      "row": 12,
+      "col": 11
+    },
+    "204": {
+      "status": "ok",
+      "row": 12,
+      "col": 12
+    },
+    "205": {
+      "status": "ok",
+      "row": 12,
+      "col": 13
+    },
+    "206": {
+      "status": "ok",
+      "row": 12,
+      "col": 14
+    },
+    "207": {
+      "status": "ok",
+      "row": 12,
+      "col": 15
+    },
+    "208": {
+      "status": "ok",
+      "row": 13,
+      "col": 0
+    },
+    "209": {
+      "status": "ok",
+      "row": 13,
+      "col": 1
+    },
+    "210": {
+      "status": "ok",
+      "row": 13,
+      "col": 2
+    },
+    "211": {
+      "status": "ok",
+      "row": 13,
+      "col": 3
+    },
+    "212": {
+      "status": "ok",
+      "row": 13,
+      "col": 4
+    },
+    "213": {
+      "status": "ok",
+      "row": 13,
+      "col": 5
+    },
+    "214": {
+      "status": "ok",
+      "row": 13,
+      "col": 6
+    },
+    "215": {
+      "status": "ok",
+      "row": 13,
+      "col": 7
+    },
+    "216": {
+      "status": "ok",
+      "row": 13,
+      "col": 8
+    },
+    "217": {
+      "status": "ok",
+      "row": 13,
+      "col": 9
+    },
+    "218": {
+      "status": "ok",
+      "row": 13,
+      "col": 10
+    },
+    "219": {
+      "status": "ok",
+      "row": 13,
+      "col": 11
+    },
+    "220": {
+      "status": "ok",
+      "row": 13,
+      "col": 12
+    },
+    "221": {
+      "status": "ok",
+      "row": 13,
+      "col": 13
+    },
+    "222": {
+      "status": "ok",
+      "row": 13,
+      "col": 14
+    },
+    "223": {
+      "status": "ok",
+      "row": 13,
+      "col": 15
+    },
+    "224": {
+      "status": "ok",
+      "row": 14,
+      "col": 0
+    },
+    "225": {
+      "status": "ok",
+      "row": 14,
+      "col": 1
+    },
+    "226": {
+      "status": "ok",
+      "row": 14,
+      "col": 2
+    },
+    "227": {
+      "status": "ok",
+      "row": 14,
+      "col": 3
+    },
+    "228": {
+      "status": "ok",
+      "row": 14,
+      "col": 4
+    },
+    "229": {
+      "status": "ok",
+      "row": 14,
+      "col": 5
+    },
+    "230": {
+      "status": "ok",
+      "row": 14,
+      "col": 6
+    },
+    "231": {
+      "status": "ok",
+      "row": 14,
+      "col": 7
+    },
+    "232": {
+      "status": "ok",
+      "row": 14,
+      "col": 8
+    },
+    "233": {
+      "status": "ok",
+      "row": 14,
+      "col": 9
+    },
+    "234": {
+      "status": "ok",
+      "row": 14,
+      "col": 10
+    },
+    "235": {
+      "status": "ok",
+      "row": 14,
+      "col": 11
+    },
+    "236": {
+      "status": "ok",
+      "row": 14,
+      "col": 12
+    },
+    "237": {
+      "status": "ok",
+      "row": 14,
+      "col": 13
+    },
+    "238": {
+      "status": "ok",
+      "row": 14,
+      "col": 14
+    },
+    "239": {
+      "status": "ok",
+      "row": 14,
+      "col": 15
+    },
+    "240": {
+      "status": "ok",
+      "row": 15,
+      "col": 0
+    },
+    "241": {
+      "status": "ok",
+      "row": 15,
+      "col": 1
+    },
+    "242": {
+      "status": "ok",
+      "row": 15,
+      "col": 2
+    },
+    "243": {
+      "status": "ok",
+      "row": 15,
+      "col": 3
+    },
+    "244": {
+      "status": "ok",
+      "row": 15,
+      "col": 4
+    },
+    "245": {
+      "status": "ok",
+      "row": 15,
+      "col": 5
+    },
+    "246": {
+      "status": "ok",
+      "row": 15,
+      "col": 6
+    },
+    "247": {
+      "status": "ok",
+      "row": 15,
+      "col": 7
+    },
+    "248": {
+      "status": "ok",
+      "row": 15,
+      "col": 8
+    },
+    "249": {
+      "status": "ok",
+      "row": 15,
+      "col": 9
+    },
+    "250": {
+      "status": "ok",
+      "row": 15,
+      "col": 10
+    },
+    "251": {
+      "status": "ok",
+      "row": 15,
+      "col": 11
+    },
+    "252": {
+      "status": "ok",
+      "row": 15,
+      "col": 12
+    },
+    "253": {
+      "status": "ok",
+      "row": 15,
+      "col": 13
+    },
+    "254": {
+      "status": "ok",
+      "row": 15,
+      "col": 14
+    },
+    "255": {
+      "status": "ok",
+      "row": 15,
+      "col": 15
+    }
+  }
+}

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zelda: Oracle of Seasons — RL Map Visualizer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #111;
+      overflow: hidden;
+      font-family: monospace;
+    }
+    canvas { display: block; }
+    #info-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 24px;
+      background: rgba(0, 0, 0, 0.8);
+      color: #aaa;
+      font-size: 12px;
+      line-height: 24px;
+      padding: 0 12px;
+      z-index: 100;
+      display: flex;
+      justify-content: space-between;
+    }
+    #info-bar a { color: #6a6; text-decoration: none; }
+    #info-bar a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="info-bar">
+    <span id="status">Connecting...</span>
+    <span>
+      Inspired by
+      <a href="https://github.com/Xe-Xo/LinkMapViz" target="_blank">LinkMapViz</a> &amp;
+      <a href="https://github.com/PWhiddy/PokemonRedExperiments" target="_blank">PokemonRedExperiments</a>
+    </span>
+  </div>
+</body>
+</html>

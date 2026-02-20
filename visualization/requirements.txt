@@ -1,0 +1,17 @@
+# Visualization dependencies for Oracle of Seasons RL map visualization
+# Install: pip install -r visualization/requirements.txt
+
+# Map generation (generate_overworld.py)
+pyboy>=2.6.0
+numpy>=1.24.0
+Pillow>=10.0.0
+
+# Streaming (stream_wrapper.py)
+gymnasium>=0.29.0
+websockets>=12.0
+
+# Offline video rendering (offline_renderer.py)
+opencv-python>=4.8.0
+
+# Optional: better video codec support
+# mediapy>=1.2.0

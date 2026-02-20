@@ -1,0 +1,5 @@
+/* Minimal styles — most rendering is done via PixiJS canvas */
+body {
+  background: #111;
+  overflow: hidden;
+}
