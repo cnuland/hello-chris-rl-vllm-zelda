@@ -350,11 +350,13 @@ class RewardWrapper(gym.Wrapper):
         if self._shaping:
             self._shaping.reset()
 
-        # Expose visited rooms set to base env for state_encoder access
+        # Expose visited rooms set to base env for state_encoder access.
+        # Filter to overworld rooms (room_id < 256) since state_encoder and
+        # frontier_exit_dist operate on the 16×16 overworld grid.
         self.env._visited_rooms_set = self._coverage._visited_rooms
 
         # Initialize frontier exit distance (all rooms unvisited at start)
-        self._prev_exit_dist = self.env.frontier_exit_dist(self._coverage._visited_rooms)
+        self._prev_exit_dist = self.env.frontier_exit_dist(set())
 
         # Start episode recording
         if self._exporter:
@@ -593,22 +595,38 @@ class RewardWrapper(gym.Wrapper):
             # Delta is clamped to [-2, +2] to prevent large reward spikes when
             # frontier_exit_dist jumps (e.g., entering a new room where the
             # nearest frontier exit is suddenly much closer or farther).
-            visited = self._coverage._visited_rooms
-            cur_exit_dist = self.env.frontier_exit_dist(visited)
+            # frontier_exit_dist works on the raw overworld room grid (0-255).
+            # Non-overworld rooms are stored as group*256+room_id (≥256) so
+            # they naturally don't interfere with the overworld grid lookup.
+            cur_exit_dist = self.env.frontier_exit_dist(
+                self._coverage._visited_rooms
+            )
             exit_delta = max(min(self._prev_exit_dist - cur_exit_dist, 2.0), -2.0)
             if exit_delta != 0:
                 reward += exit_delta * self._exit_seeking_scale
             self._prev_exit_dist = cur_exit_dist
 
             # Coverage reward with area-based boost — only when the agent
-            # actually moved (prevents standing-still and wall-bump farming)
+            # actually moved (prevents standing-still and wall-bump farming).
+            # Uses group-qualified room_id (group * 256 + room_id) so rooms
+            # from different groups (overworld, indoors, dungeons) are tracked
+            # independently.  Raw room_id alone would conflate Hero's Cave
+            # room 1 with overworld room 1.
             cur_pixel_x = info.get("pixel_x", 0)
             cur_pixel_y = info.get("pixel_y", 0)
             actually_moved = (cur_pixel_x != self._prev_pixel_x or
                               cur_pixel_y != self._prev_pixel_y)
             if actually_moved:
+                # Overworld (group 0) rooms stay 0-255 for frontier/neighbor
+                # compatibility.  Non-overworld rooms get offset (group*256+id)
+                # to avoid conflating Hero's Cave room 1 with overworld room 1.
+                raw_room = info.get("room_id", 0)
+                if active_group == 0:
+                    qualified_room = raw_room
+                else:
+                    qualified_room = active_group * 256 + raw_room
                 coverage = self._coverage.step(
-                    info.get("room_id", 0),
+                    qualified_room,
                     cur_pixel_x,
                     cur_pixel_y,
                 )
