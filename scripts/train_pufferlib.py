@@ -397,6 +397,7 @@ def run_training_epoch(
         "total_visited_maku_tree": 0,
         "total_maku_dialog": 0,
         "total_gnarled_key": 0,
+        "total_maku_seed": 0,
         "max_rooms": 0,
         "max_tiles": 0,
         "max_essences": 0,
@@ -463,6 +464,8 @@ def run_training_epoch(
                             milestones["total_maku_dialog"] += 1
                         if env_info.get("milestone_gnarled_key", 0) > 0:
                             milestones["total_gnarled_key"] += 1
+                        if env_info.get("milestone_maku_seed", 0) > 0:
+                            milestones["total_maku_seed"] += 1
                         milestones["max_rooms"] = max(
                             milestones["max_rooms"],
                             int(env_info.get("milestone_max_rooms", 0)),
@@ -648,6 +651,7 @@ def run_training_epoch(
     logger.info("  Visited Maku Tree:    %d/%d episodes", milestones["total_visited_maku_tree"], n_eps)
     logger.info("  Maku Tree dialog:     %d/%d episodes", milestones["total_maku_dialog"], n_eps)
     logger.info("  Got Gnarled Key:      %d/%d episodes", milestones["total_gnarled_key"], n_eps)
+    logger.info("  Got Maku Seed:        %d/%d episodes", milestones["total_maku_seed"], n_eps)
     logger.info("  Entered dungeon:      %d/%d episodes", milestones["total_entered_dungeon"], n_eps)
     logger.info("  Max essences:         %d", milestones["max_essences"])
     logger.info("  Max dungeon keys:     %d", milestones["max_dungeon_keys"])

@@ -100,7 +100,14 @@ GNARLED_KEY_GIVEN_MASK = 0x01
 GNARLED_KEY_OBTAINED = 0xC69A     # wObtainedTreasureFlags + 8, bit 2 = picked up key
 GNARLED_KEY_OBTAINED_MASK = 0x04
 # Maku Tree stage: 0=first meeting, increases with essences collected
-MAKU_TREE_STAGE = 0xCDDA          # ws_cc39 (Seasons only)
+# NOTE: oracles-disasm confirmed this is ws_cc39 at 0xCC39 for Seasons.
+# The original 0xCDDA was actually wIsMaplePresent (Maple NPC flag).
+MAKU_TREE_STAGE = 0xCC39          # ws_cc39 (Seasons only)
+
+# GLOBALFLAG_GOT_MAKU_SEED = flag 0x19 → byte 3 (0xC6CD), bit 1
+# Set when Maku Tree gives the Maku Seed after collecting all 8 essences.
+MAKU_SEED_FLAG = 0xC6CD           # wGlobalFlags + 3, bit 1
+MAKU_SEED_MASK = 0x02
 
 # =============================================================================
 # World

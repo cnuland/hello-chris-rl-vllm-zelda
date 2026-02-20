@@ -30,6 +30,8 @@ from agent.env.ram_addresses import (
     GNARLED_KEY_OBTAINED,
     GNARLED_KEY_OBTAINED_MASK,
     LINK_PUSHING_DIRECTION,
+    MAKU_SEED_FLAG,
+    MAKU_SEED_MASK,
     RUPEES,
     SWORD_LEVEL,
 )
@@ -81,11 +83,16 @@ class RewardWrapper(gym.Wrapper):
         self._prev_dialog_active = False
 
         # Maku Tree quest milestone rewards — one-time bonuses for
-        # critical quest progression (oracles-disasm confirmed addresses)
-        self._maku_dialog_bonus = cfg.get("maku_dialog", 30.0)
-        self._gnarled_key_bonus = cfg.get("gnarled_key", 30.0)
+        # critical quest progression (oracles-disasm confirmed addresses).
+        # These must be LARGE relative to exploration rewards (~300/episode)
+        # to incentivize the specific actions needed at the Maku Tree:
+        # slash gate → enter grove → pop bubble → dialog → pick up key.
+        self._maku_dialog_bonus = cfg.get("maku_dialog", 100.0)
+        self._gnarled_key_bonus = cfg.get("gnarled_key", 100.0)
+        self._maku_seed_bonus = cfg.get("maku_seed", 200.0)
         self._prev_maku_dialog = False
         self._prev_gnarled_key = False
+        self._prev_maku_seed = False
 
         # Stagnation-based truncation — end episode early if agent hasn't
         # discovered any new TILES for this many steps.  Tile-based (not
@@ -294,6 +301,9 @@ class RewardWrapper(gym.Wrapper):
             self._prev_gnarled_key = bool(
                 self.env._read(GNARLED_KEY_OBTAINED) & GNARLED_KEY_OBTAINED_MASK
             )
+            self._prev_maku_seed = bool(
+                self.env._read(MAKU_SEED_FLAG) & MAKU_SEED_MASK
+            )
         else:
             self._prev_rupees = 0
             self._prev_keys = 0
@@ -301,6 +311,7 @@ class RewardWrapper(gym.Wrapper):
             self._prev_essences = 0
             self._prev_maku_dialog = False
             self._prev_gnarled_key = False
+            self._prev_maku_seed = False
 
         # Reset sub-modules
         self._coverage.reset()
@@ -346,6 +357,7 @@ class RewardWrapper(gym.Wrapper):
         self._baseline_essences = self._prev_essences
         self._baseline_maku_dialog = self._prev_maku_dialog
         self._baseline_gnarled_key = self._prev_gnarled_key
+        self._baseline_maku_seed = self._prev_maku_seed
         self._baseline_group = self._prev_group
         if self._shaping:
             self._shaping.reset()
@@ -386,9 +398,15 @@ class RewardWrapper(gym.Wrapper):
         new_tiles = self._coverage.total_tiles
         dialog_active = info.get("dialog_active", False)
         is_transitioning = info.get("transitioning", False)
+        active_group = info.get("active_group", 0)
         if new_tiles > self._prev_total_tiles:
             self._steps_since_discovery = 0
-        elif not dialog_active and not is_transitioning:
+        elif not dialog_active and not is_transitioning and active_group != 2:
+            # Freeze stagnation counter in Maku Tree area (group 2).
+            # The agent needs many steps of non-movement interaction
+            # (slashing gate, popping bubble, advancing dialog) to complete
+            # quest objectives.  These actions don't discover new tiles but
+            # ARE productive, so don't count them toward stagnation.
             self._steps_since_discovery += 1
         self._prev_total_tiles = new_tiles
 
@@ -450,6 +468,9 @@ class RewardWrapper(gym.Wrapper):
         )
         info["milestone_gnarled_key"] = float(
             self._prev_gnarled_key and not self._baseline_gnarled_key
+        )
+        info["milestone_maku_seed"] = float(
+            self._prev_maku_seed and not self._baseline_maku_seed
         )
 
         return obs, reward, terminated, truncated, info
@@ -564,6 +585,14 @@ class RewardWrapper(gym.Wrapper):
                 self._milestone_achieved_this_step = True
                 logger.info("MILESTONE: Gnarled Key obtained! (+%.0f)", self._gnarled_key_bonus)
             self._prev_gnarled_key = gnarled_key
+
+            # Check GLOBALFLAG_GOT_MAKU_SEED (end-game, after all 8 essences)
+            maku_seed = bool(self.env._read(MAKU_SEED_FLAG) & MAKU_SEED_MASK)
+            if maku_seed and not self._prev_maku_seed:
+                reward += self._maku_seed_bonus
+                self._milestone_achieved_this_step = True
+                logger.info("MILESTONE: Maku Seed obtained! (+%.0f)", self._maku_seed_bonus)
+            self._prev_maku_seed = maku_seed
 
         # --- Menu management ---
         # Allow brief menu access for item switching, but suppress exploration

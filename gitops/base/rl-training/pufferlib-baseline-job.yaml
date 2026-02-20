@@ -59,11 +59,14 @@ spec:
           value: "2048"
         - name: USE_LSTM
           value: "false"
-        # Scheduling — lower entropy to let policy specialize
+        # Scheduling — high entropy to maintain exploration diversity.
+        # Previous values (0.003/0.0005) caused entropy collapse by epoch 2,
+        # policy over-specialized on a single 3-room path.  Pokemon Red puffer
+        # uses constant 0.01 — we start 50% higher and decay to 0.005.
         - name: ENTROPY_START
-          value: "0.003"
+          value: "0.015"
         - name: ENTROPY_END
-          value: "0.0005"
+          value: "0.005"
         - name: LR_START
           value: "2.5e-4"
         - name: LR_END
@@ -71,7 +74,7 @@ spec:
         - name: GOD_MODE_EPOCHS
           value: "12"
         - name: STAGNATION_LIMIT
-          value: "1500"
+          value: "5000"
         - name: NUM_STEPS
           value: "256"
         - name: TIME_PENALTY
