@@ -30,8 +30,12 @@ from agent.env.ram_addresses import (
     GNARLED_KEY_OBTAINED,
     GNARLED_KEY_OBTAINED_MASK,
     LINK_PUSHING_DIRECTION,
+    MAKU_ROOM_FLAGS,
     MAKU_SEED_FLAG,
     MAKU_SEED_MASK,
+    MAKU_TREE_STAGE,
+    ROOMFLAG_GATE_HIT,
+    ROOMFLAG_ITEM_OBTAINED,
     RUPEES,
     SWORD_LEVEL,
 )
@@ -93,6 +97,19 @@ class RewardWrapper(gym.Wrapper):
         self._prev_maku_dialog = False
         self._prev_gnarled_key = False
         self._prev_maku_seed = False
+
+        # Maku Tree sub-event rewards — intermediate milestones that guide
+        # the agent through the required interaction sequence:
+        #   1. Slash the gate (room flag 0x80)  →  gate_slash_bonus
+        #   2. Reach new rooms in group 2       →  maku_room_bonus (per room)
+        #   3. Maku Tree stage changes (0xCC39) →  maku_stage_bonus
+        # These bridge the gap between "entered Maku Tree area" and "got key."
+        self._gate_slash_bonus = cfg.get("gate_slash", 50.0)
+        self._maku_room_bonus = cfg.get("maku_room", 15.0)
+        self._maku_stage_bonus = cfg.get("maku_stage", 75.0)
+        self._gate_slashed = False
+        self._maku_rooms_visited: set[int] = set()
+        self._prev_maku_stage = 0
 
         # Stagnation-based truncation — end episode early if agent hasn't
         # discovered any new TILES for this many steps.  Tile-based (not
@@ -304,6 +321,7 @@ class RewardWrapper(gym.Wrapper):
             self._prev_maku_seed = bool(
                 self.env._read(MAKU_SEED_FLAG) & MAKU_SEED_MASK
             )
+            self._prev_maku_stage = self.env._read(MAKU_TREE_STAGE)
         else:
             self._prev_rupees = 0
             self._prev_keys = 0
@@ -358,7 +376,10 @@ class RewardWrapper(gym.Wrapper):
         self._baseline_maku_dialog = self._prev_maku_dialog
         self._baseline_gnarled_key = self._prev_gnarled_key
         self._baseline_maku_seed = self._prev_maku_seed
+        self._baseline_maku_stage = self._prev_maku_stage
         self._baseline_group = self._prev_group
+        self._gate_slashed = False
+        self._maku_rooms_visited.clear()
         if self._shaping:
             self._shaping.reset()
 
@@ -471,6 +492,11 @@ class RewardWrapper(gym.Wrapper):
         )
         info["milestone_maku_seed"] = float(
             self._prev_maku_seed and not self._baseline_maku_seed
+        )
+        info["milestone_gate_slashed"] = float(self._gate_slashed)
+        info["milestone_maku_rooms"] = float(len(self._maku_rooms_visited))
+        info["milestone_maku_stage"] = float(
+            self._prev_maku_stage > self._baseline_maku_stage
         )
 
         return obs, reward, terminated, truncated, info
@@ -593,6 +619,47 @@ class RewardWrapper(gym.Wrapper):
                 self._milestone_achieved_this_step = True
                 logger.info("MILESTONE: Maku Seed obtained! (+%.0f)", self._maku_seed_bonus)
             self._prev_maku_seed = maku_seed
+
+        # --- Maku Tree sub-event rewards ---
+        # Guide the agent through the interaction sequence within group 2:
+        #   slash gate → enter grove → pop bubble → dialog → pick up key
+        # Room flags at $C800+room_id track persistent per-room state.
+        if active_group == 2 and hasattr(self.env, "_read"):
+            room_id = info.get("room_id", 0)
+
+            # 1. Gate slash: room flag bit 7 (0x80) set by makuTreeScript_gateHit
+            room_flags = self.env._read(MAKU_ROOM_FLAGS + room_id)
+            if (room_flags & ROOMFLAG_GATE_HIT) and not self._gate_slashed:
+                self._gate_slashed = True
+                reward += self._gate_slash_bonus
+                self._milestone_achieved_this_step = True
+                logger.info(
+                    "MILESTONE: Maku Tree gate slashed! room=%d flags=0x%02X (+%.0f)",
+                    room_id, room_flags, self._gate_slash_bonus,
+                )
+
+            # 2. New rooms within group 2 — each new room means deeper
+            #    progress into the Maku Tree area
+            if room_id not in self._maku_rooms_visited:
+                self._maku_rooms_visited.add(room_id)
+                reward += self._maku_room_bonus
+                self._milestone_achieved_this_step = True
+                logger.info(
+                    "MILESTONE: New Maku Tree room %d (total: %d) (+%.0f)",
+                    room_id, len(self._maku_rooms_visited), self._maku_room_bonus,
+                )
+
+            # 3. Maku Tree stage change — ws_cc39 increases as the tree
+            #    interaction progresses (bubble pop → dialog → key)
+            maku_stage = self.env._read(MAKU_TREE_STAGE)
+            if maku_stage != self._prev_maku_stage and maku_stage > self._baseline_maku_stage:
+                reward += self._maku_stage_bonus
+                self._milestone_achieved_this_step = True
+                logger.info(
+                    "MILESTONE: Maku Tree stage %d → %d (+%.0f)",
+                    self._prev_maku_stage, maku_stage, self._maku_stage_bonus,
+                )
+            self._prev_maku_stage = maku_stage
 
         # --- Menu management ---
         # Allow brief menu access for item switching, but suppress exploration

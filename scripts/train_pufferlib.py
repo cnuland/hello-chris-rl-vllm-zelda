@@ -395,11 +395,14 @@ def run_training_epoch(
         "total_got_sword": 0,
         "total_entered_dungeon": 0,
         "total_visited_maku_tree": 0,
+        "total_gate_slashed": 0,
+        "total_maku_stage": 0,
         "total_maku_dialog": 0,
         "total_gnarled_key": 0,
         "total_maku_seed": 0,
         "max_rooms": 0,
         "max_tiles": 0,
+        "max_maku_rooms": 0,
         "max_essences": 0,
         "max_dungeon_keys": 0,
     }
@@ -462,10 +465,18 @@ def run_training_epoch(
                             milestones["total_visited_maku_tree"] += 1
                         if env_info.get("milestone_maku_dialog", 0) > 0:
                             milestones["total_maku_dialog"] += 1
+                        if env_info.get("milestone_gate_slashed", 0) > 0:
+                            milestones["total_gate_slashed"] += 1
+                        if env_info.get("milestone_maku_stage", 0) > 0:
+                            milestones["total_maku_stage"] += 1
                         if env_info.get("milestone_gnarled_key", 0) > 0:
                             milestones["total_gnarled_key"] += 1
                         if env_info.get("milestone_maku_seed", 0) > 0:
                             milestones["total_maku_seed"] += 1
+                        milestones["max_maku_rooms"] = max(
+                            milestones["max_maku_rooms"],
+                            int(env_info.get("milestone_maku_rooms", 0)),
+                        )
                         milestones["max_rooms"] = max(
                             milestones["max_rooms"],
                             int(env_info.get("milestone_max_rooms", 0)),
@@ -649,6 +660,9 @@ def run_training_epoch(
     logger.info("  Max tiles explored:   %d", milestones["max_tiles"])
     logger.info("  Got sword:            %d/%d episodes", milestones["total_got_sword"], n_eps)
     logger.info("  Visited Maku Tree:    %d/%d episodes", milestones["total_visited_maku_tree"], n_eps)
+    logger.info("  Slashed gate:         %d/%d episodes", milestones["total_gate_slashed"], n_eps)
+    logger.info("  Maku Tree rooms:      %d max", milestones["max_maku_rooms"])
+    logger.info("  Maku Tree stage up:   %d/%d episodes", milestones["total_maku_stage"], n_eps)
     logger.info("  Maku Tree dialog:     %d/%d episodes", milestones["total_maku_dialog"], n_eps)
     logger.info("  Got Gnarled Key:      %d/%d episodes", milestones["total_gnarled_key"], n_eps)
     logger.info("  Got Maku Seed:        %d/%d episodes", milestones["total_maku_seed"], n_eps)

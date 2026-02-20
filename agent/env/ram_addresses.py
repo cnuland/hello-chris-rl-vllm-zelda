@@ -109,6 +109,21 @@ MAKU_TREE_STAGE = 0xCC39          # ws_cc39 (Seasons only)
 MAKU_SEED_FLAG = 0xC6CD           # wGlobalFlags + 3, bit 1
 MAKU_SEED_MASK = 0x02
 
+# --- Room flags (per-room persistent state) ---
+# 256-byte arrays storing per-room flags.  Groups 2 & 3 share Group 1's
+# flags ($C800) because their room_id ranges don't overlap with Subrosia.
+# Flag bits: 0x80=keyblock/stairs, 0x40=item/chest, 0x10=visited
+OVERWORLD_ROOM_FLAGS = 0xC700     # wOverworldRoomFlags (group 0)
+SUBROSIA_ROOM_FLAGS = 0xC800      # wSubrosiaRoomFlags (groups 1, 2, 3)
+MAKU_ROOM_FLAGS = 0xC800          # Same as Subrosia — Maku Tree uses group 1 flags
+DUNGEON_G4_ROOM_FLAGS = 0xC900    # wGroup4RoomFlags (dungeons 0-7)
+DUNGEON_G5_ROOM_FLAGS = 0xCA00    # wGroup5RoomFlags (dungeons 8+)
+
+# Room flag bit masks (from constants/common/roomFlags.s)
+ROOMFLAG_GATE_HIT = 0x80          # Bit 7: keyblock/stairs cleared (gate slashed)
+ROOMFLAG_ITEM_OBTAINED = 0x40     # Bit 6: item obtained/chest opened
+ROOMFLAG_VISITED = 0x10           # Bit 4: room has been visited
+
 # =============================================================================
 # World
 # =============================================================================
