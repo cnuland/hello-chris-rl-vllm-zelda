@@ -12,15 +12,11 @@ Vector features (128-D normalized [0,1]):
   34-36: Room state (enemies, toggle blocks, switches)
   37-44: Boss keys bitfield (8)
   45-64: OAM sprite proximity (20)
-  65-68: Edge exit indicators (up, down, left, right)
-  69-72: Ray-cast distances (tiles walkable in each direction)
-  73-76: Exit distances (Manhattan dist to nearest exit per edge)
-  77-78: Direction to nearest exit (dx, dy)
+  65-78: Reserved (formerly collision-dependent navigation features)
   79:    Active tile type
   80-83: Screen edge distances (left, right, up, down)
   84-87: Neighbor visited flags (N, S, E, W) — frontier awareness
-  88-89: Frontier exit distance, any exit distance
-  90-127: Reserved
+  88-127: Reserved
 
 JSON planner format:
   player:{x,y,dir,hp,max_hp}, room_id, inventory:{...}, flags:{dialog,puzzle,cutscene},
@@ -151,7 +147,7 @@ def encode_vector(env: ZeldaEnv) -> np.ndarray:
     # --- Flags (4) ---
     v[idx] = 1.0 if r(DIALOG_STATE) != 0 else 0.0
     v[idx + 1] = 1.0 if r(PUZZLE_FLAGS) != 0 else 0.0
-    v[idx + 2] = 1.0 if r(SCREEN_TRANSITION) != 0 else 0.0
+    v[idx + 2] = 1.0 if (r(SCREEN_TRANSITION) & 0x80) != 0 else 0.0
     v[idx + 3] = r(OVERWORLD_POSITION) / 255.0
     idx += 4
 
@@ -176,33 +172,19 @@ def encode_vector(env: ZeldaEnv) -> np.ndarray:
         idx += 1
 
     # --- Navigation features (dims 65+) ---
-    # Edge exit indicators (4): can the agent exit the room in each direction?
-    exit_up, exit_down, exit_left, exit_right = env.check_edge_exits()
-    v[idx] = exit_up
-    v[idx + 1] = exit_down
-    v[idx + 2] = exit_left
-    v[idx + 3] = exit_right
-    idx += 4
-
-    # Ray-cast distances (4): how far can the agent walk in each direction?
-    ray_up, ray_down, ray_left, ray_right = env.ray_cast_distances()
-    v[idx] = ray_up
-    v[idx + 1] = ray_down
-    v[idx + 2] = ray_left
-    v[idx + 3] = ray_right
-    idx += 4
-
-    # Exit distances (4) + direction to nearest exit (2):
-    # Manhattan distance to nearest walkable edge tile per direction,
-    # plus a 2-D vector pointing toward the overall nearest exit.
-    ed_up, ed_down, ed_left, ed_right, dir_x, dir_y = env.exit_distances()
-    v[idx] = ed_up
-    v[idx + 1] = ed_down
-    v[idx + 2] = ed_left
-    v[idx + 3] = ed_right
-    v[idx + 4] = dir_x
-    v[idx + 5] = dir_y
-    idx += 6
+    # REMOVED: Edge exit indicators, ray-cast distances, exit distances,
+    # collision map 5×4, and frontier exit distances.
+    #
+    # These features depended on _WALKABLE_TILES to classify tile types
+    # from wRoomCollisions.  Missing tile types caused the agent to "see"
+    # walls where there were walkable paths, creating invisible barriers
+    # that prevented northward exploration.  The game engine handles
+    # collision correctly — the agent learns navigation from whether its
+    # position changes after an action, not from a hand-crafted map.
+    #
+    # Zeroed dims: 65-72 (exits/rays), 73-78 (exit distances),
+    #              88-89 (frontier distances), 90-109 (collision map)
+    idx += 14  # skip dims 65-78 (zeros)
 
     # Active tile type (1): what Link is standing on
     v[idx] = min(r(ACTIVE_TILE_TYPE) / 24.0, 1.0)
@@ -217,9 +199,10 @@ def encode_vector(env: ZeldaEnv) -> np.ndarray:
     v[idx + 3] = max(144 - py, 0) / 144.0
     idx += 4
 
-    # --- Frontier awareness (dims 84-89) ---
+    # --- Frontier awareness (dims 84-87) ---
     # Neighbor visited flags (4): is the adjacent room already explored?
     # 0.0 = frontier (unvisited), 1.0 = visited (backtracking)
+    # NOTE: This does NOT depend on _WALKABLE_TILES — uses visited_rooms set.
     n_north, n_south, n_east, n_west = env.neighbor_room_visited()
     v[idx] = n_north
     v[idx + 1] = n_south
@@ -227,23 +210,8 @@ def encode_vector(env: ZeldaEnv) -> np.ndarray:
     v[idx + 3] = n_west
     idx += 4
 
-    # Frontier vs any exit distance (2): how far to nearest unexplored exit?
-    visited = getattr(env, "_visited_rooms_set", set())
-    frontier_d = env.frontier_exit_dist(visited)
-    any_d = env.nearest_exit_dist
-    v[idx] = min(frontier_d / 16.0, 1.0)
-    v[idx + 1] = min(any_d / 16.0, 1.0) if any_d < 999 else 1.0
-    idx += 2
-
-    # --- Room collision map (dims 90-109) ---
-    # 5×4 downsampled collision grid: 1.0 = walkable, 0.0 = blocked.
-    # Gives the agent a spatial map of the room without needing a CNN.
-    collision = env.collision_map_5x4()
-    for ci in range(20):
-        v[idx] = collision[ci]
-        idx += 1
-
-    # Remaining slots (idx should be ~110) stay zero-filled
+    # Skip dims 88-109 (zeros) — formerly frontier distances + collision map
+    # idx stays where it is; remaining slots zero-filled
     return np.clip(v, 0.0, 1.0)
 
 

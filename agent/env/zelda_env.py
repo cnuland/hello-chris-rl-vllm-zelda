@@ -90,16 +90,26 @@ _KEYS_JUST_PRESSED = 0xC482  # wKeysJustPressed (buttons pressed this frame)
 _ROOM_COLLISIONS = 0xCE00
 _ACTIVE_TILE_TYPE = 0xCCB6
 
-# Tile types that Link can walk on (from oracles-disasm)
+# Tile types that Link can walk on (from oracles-disasm tileTypes.s).
+# CRITICAL: every navigation observation feature (edge exits, ray-casts,
+# collision map 5×4, frontier distance, exit-seeking) depends on this set.
+# Missing a walkable type causes the agent to "see" walls where there are
+# paths, creating invisible barriers in the observation that prevent
+# exploration even though the game engine allows walking there.
 _WALKABLE_TILES = frozenset({
-    0x00,  # NORMAL
-    0x03,  # CRACKEDFLOOR
-    0x04,  # VINES
-    0x05,  # GRASS
-    0x06,  # STAIRS
-    0x0E,  # CRACKED_ICE
-    0x0F,  # ICE
-    0x11,  # PUDDLE
+    0x00,  # TILETYPE_NORMAL
+    0x03,  # TILETYPE_CRACKEDFLOOR (breaks after standing)
+    0x04,  # TILETYPE_VINES (climbable)
+    0x05,  # TILETYPE_GRASS (cutable, walkable)
+    0x06,  # TILETYPE_STAIRS (slower movement)
+    0x09,  # TILETYPE_UPCONVEYOR (pushes Link up)
+    0x0A,  # TILETYPE_RIGHTCONVEYOR (pushes Link right)
+    0x0B,  # TILETYPE_DOWNCONVEYOR (pushes Link down)
+    0x0C,  # TILETYPE_LEFTCONVEYOR (pushes Link left)
+    0x0D,  # TILETYPE_SPIKE (damages but walkable)
+    0x0E,  # TILETYPE_CRACKED_ICE (Seasons: breaks after walking)
+    0x0F,  # TILETYPE_ICE (slippery)
+    0x11,  # TILETYPE_PUDDLE (shallow water, splash effect)
 })
 
 
@@ -317,6 +327,41 @@ class ZeldaEnv(gym.Env):
     # ------------------------------------------------------------------
     # Collision / navigation
     # ------------------------------------------------------------------
+
+    def log_collision_edge_types(self, room_id: int) -> None:
+        """Log tile type values at room edges (diagnostic).
+
+        Called once per new room to reveal which tile types appear at
+        screen edges.  Helps diagnose "invisible barrier" issues where
+        the agent sees no exit but the game allows walking there.
+        """
+        top_types = [self._read(_ROOM_COLLISIONS + 0 * 16 + x) for x in range(10)]
+        bot_types = [self._read(_ROOM_COLLISIONS + 7 * 16 + x) for x in range(10)]
+        left_types = [self._read(_ROOM_COLLISIONS + y * 16 + 0) for y in range(8)]
+        right_types = [self._read(_ROOM_COLLISIONS + y * 16 + 9) for y in range(8)]
+
+        # Only log unknown types (not in _WALKABLE_TILES) to reduce noise
+        unknown_top = {v for v in top_types if v not in _WALKABLE_TILES and v != 0}
+        unknown_bot = {v for v in bot_types if v not in _WALKABLE_TILES and v != 0}
+        unknown_left = {v for v in left_types if v not in _WALKABLE_TILES and v != 0}
+        unknown_right = {v for v in right_types if v not in _WALKABLE_TILES and v != 0}
+
+        if unknown_top or unknown_bot or unknown_left or unknown_right:
+            row, col = room_id // 16, room_id % 16
+            logger.info(
+                "COLLISION EDGE room=%d (row=%d,col=%d) | "
+                "top=%s unkn=%s | bot=%s unkn=%s | "
+                "left=%s unkn=%s | right=%s unkn=%s",
+                room_id, row, col,
+                [f"0x{v:02X}" for v in top_types],
+                {f"0x{v:02X}" for v in unknown_top} if unknown_top else "{}",
+                [f"0x{v:02X}" for v in bot_types],
+                {f"0x{v:02X}" for v in unknown_bot} if unknown_bot else "{}",
+                [f"0x{v:02X}" for v in left_types],
+                {f"0x{v:02X}" for v in unknown_left} if unknown_left else "{}",
+                [f"0x{v:02X}" for v in right_types],
+                {f"0x{v:02X}" for v in unknown_right} if unknown_right else "{}",
+            )
 
     def check_edge_exits(self) -> tuple[float, float, float, float]:
         """Check if any tile on each screen edge is walkable (potential exit).

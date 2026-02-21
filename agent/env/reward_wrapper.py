@@ -130,8 +130,13 @@ class RewardWrapper(gym.Wrapper):
         # known territory without being truncated.
         self._milestone_achieved_this_step = False
 
-        # Exit-seeking shaping — continuous reward for moving toward FRONTIER exits
-        self._exit_seeking_scale = cfg.get("exit_seeking", 0.5)
+        # Exit-seeking shaping — REMOVED.  Depended on frontier_exit_dist()
+        # which used _WALKABLE_TILES to identify exits.  Missing tile types
+        # caused the agent to be rewarded for walking toward phantom exits
+        # (cliff faces, non-walkable tiles misidentified as exits) instead
+        # of toward actual usable paths.  The distance + directional bonuses
+        # provide sufficient room-transition incentive without needing
+        # per-tile collision data.
 
         # Distance bonus — reward for moving far from the starting position.
         # Critical for multi-room exploration: without this, the agent has no
@@ -153,7 +158,6 @@ class RewardWrapper(gym.Wrapper):
                                                     os.getenv("DIRECTIONAL_TARGET_COL", "12")))
         self._directional_target_scale = float(cfg.get("directional_target_scale", "1.0"))
         self._min_target_distance = 999
-        self._prev_exit_dist = 0
 
         # Structured directives from the LLM reward advisor — processed as
         # one-time bonuses or per-step penalties based on area/action conditions.
@@ -461,12 +465,8 @@ class RewardWrapper(gym.Wrapper):
             self._shaping.reset()
 
         # Expose visited rooms set to base env for state_encoder access.
-        # Filter to overworld rooms (room_id < 256) since state_encoder and
-        # frontier_exit_dist operate on the 16×16 overworld grid.
+        # Used by neighbor_room_visited() for frontier awareness (dims 84-87).
         self.env._visited_rooms_set = self._coverage._visited_rooms
-
-        # Initialize frontier exit distance (all rooms unvisited at start)
-        self._prev_exit_dist = self.env.frontier_exit_dist(set())
 
         # Start episode recording
         if self._exporter:
@@ -830,21 +830,6 @@ class RewardWrapper(gym.Wrapper):
                     reward += self._backtrack_penalty
                 self._recent_rooms.append(room_id)
             self._prev_room_id = room_id
-
-            # Exit-seeking shaping: reward moving toward FRONTIER (unvisited) exits.
-            # Delta is clamped to [-2, +2] to prevent large reward spikes when
-            # frontier_exit_dist jumps (e.g., entering a new room where the
-            # nearest frontier exit is suddenly much closer or farther).
-            # frontier_exit_dist works on the raw overworld room grid (0-255).
-            # Non-overworld rooms are stored as group*256+room_id (≥256) so
-            # they naturally don't interfere with the overworld grid lookup.
-            cur_exit_dist = self.env.frontier_exit_dist(
-                self._coverage._visited_rooms
-            )
-            exit_delta = max(min(self._prev_exit_dist - cur_exit_dist, 2.0), -2.0)
-            if exit_delta != 0:
-                reward += exit_delta * self._exit_seeking_scale
-            self._prev_exit_dist = cur_exit_dist
 
             # Coverage reward with area-based boost — only when the agent
             # actually moved (prevents standing-still and wall-bump farming).
