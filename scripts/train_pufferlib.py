@@ -80,6 +80,8 @@ def make_env(
     frame_skip: int = 4,
     max_steps: int = 30_000,
     save_state_path: str = "",
+    alt_save_state_path: str = "",
+    alt_save_state_ratio: float = 0.5,
     god_mode: bool = False,
     epoch: int = 0,
     reward_config: dict | None = None,
@@ -110,6 +112,8 @@ def make_env(
         frame_skip=frame_skip,
         max_steps=max_steps,
         save_state_path=save_state_path if save_state_path else None,
+        alt_save_state_path=alt_save_state_path if alt_save_state_path else None,
+        alt_save_state_ratio=alt_save_state_ratio,
         render_mode="rgb_array",
         god_mode=god_mode,
     )
@@ -307,6 +311,8 @@ def run_training_epoch(
     rm_path: str,
     prev_checkpoint: str,
     save_state_path: str,
+    alt_save_state_path: str = "",
+    alt_save_state_ratio: float = 0.5,
     num_steps: int = 128,
     minibatch_size: int = 2048,
     gamma: float = 0.999,
@@ -349,6 +355,8 @@ def run_training_epoch(
         frame_skip=4,
         max_steps=ep_length,
         save_state_path=save_state_path,
+        alt_save_state_path=alt_save_state_path,
+        alt_save_state_ratio=alt_save_state_ratio,
         god_mode=god_mode,
         epoch=epoch,
         reward_config=reward_config,
@@ -959,6 +967,19 @@ def main():
         god_mode = epoch < (start_epoch + god_mode_epochs)
 
         # Phase 1: Training
+        # Curriculum diversity: when using an advancing checkpoint, 50% of
+        # episodes start from the default save state to prevent over-fitting
+        # to a single starting position and maintain exploration variety.
+        alt_state = ""
+        alt_ratio = 0.5
+        if save_state_path != original_save_state_path:
+            alt_state = original_save_state_path
+            logger.info(
+                "Curriculum split: 50%% advancing (%s) / 50%% default (%s)",
+                os.path.basename(save_state_path),
+                os.path.basename(original_save_state_path),
+            )
+
         checkpoint, mean_reward, metadata, advancement = run_training_epoch(
             epoch=epoch,
             num_envs=num_envs,
@@ -975,6 +996,8 @@ def main():
             rm_path=rm_path,
             prev_checkpoint=global_best_checkpoint,
             save_state_path=save_state_path,
+            alt_save_state_path=alt_state,
+            alt_save_state_ratio=alt_ratio,
             num_steps=num_steps,
             minibatch_size=minibatch_size,
             update_epochs=update_epochs,

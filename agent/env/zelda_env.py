@@ -119,6 +119,8 @@ class ZeldaEnv(gym.Env):
         frame_skip: int = 4,
         max_steps: int = 30_000,
         save_state_path: str | None = None,
+        alt_save_state_path: str | None = None,
+        alt_save_state_ratio: float = 0.5,
         render_mode: str | None = None,
         seed: int | None = None,
         god_mode: bool = False,
@@ -129,6 +131,8 @@ class ZeldaEnv(gym.Env):
         self.frame_skip = frame_skip
         self.max_steps = max_steps
         self._save_state_path = save_state_path or None
+        self._alt_save_state_path = alt_save_state_path or None
+        self._alt_save_state_ratio = alt_save_state_ratio
         self.render_mode = render_mode
         self._seed = seed
         self._god_mode = god_mode
@@ -136,6 +140,8 @@ class ZeldaEnv(gym.Env):
         # Lazy PyBoy init — deferred to first reset()
         self._pyboy = None
         self._initial_state: bytes | None = None
+        self._alt_initial_state: bytes | None = None
+        self._rng = np.random.RandomState(seed or 0)
 
         # Spaces — MultiDiscrete allows simultaneous movement + button press.
         # Dimension 0: movement (5) — NOP, UP, DOWN, LEFT, RIGHT
@@ -215,6 +221,21 @@ class ZeldaEnv(gym.Env):
         buf = io.BytesIO()
         self._pyboy.save_state(buf)
         self._initial_state = buf.getvalue()
+
+        # Load alternate save state for curriculum diversity
+        if self._alt_save_state_path:
+            with open(self._alt_save_state_path, "rb") as f:
+                self._pyboy.load_state(f)
+            alt_buf = io.BytesIO()
+            self._pyboy.save_state(alt_buf)
+            self._alt_initial_state = alt_buf.getvalue()
+            # Restore primary state after capturing alt
+            self._pyboy.load_state(io.BytesIO(self._initial_state))
+            logger.info(
+                "Loaded alt save state: %s (ratio=%.0f%%)",
+                self._alt_save_state_path,
+                self._alt_save_state_ratio * 100,
+            )
 
     # ------------------------------------------------------------------
     # RAM helpers
@@ -490,9 +511,14 @@ class ZeldaEnv(gym.Env):
         super().reset(seed=seed)
         self._ensure_pyboy()
 
-        # Deterministic reload from saved state
+        # Reload from saved state — randomly choose between primary and alt
+        # to add curriculum diversity (e.g., 50% advanced state, 50% default)
         if self._initial_state is not None:
-            self._pyboy.load_state(io.BytesIO(self._initial_state))
+            if (self._alt_initial_state is not None
+                    and self._rng.random() < self._alt_save_state_ratio):
+                self._pyboy.load_state(io.BytesIO(self._alt_initial_state))
+            else:
+                self._pyboy.load_state(io.BytesIO(self._initial_state))
 
         # Flush stale button state from save state
         self._clear_input_registers()
