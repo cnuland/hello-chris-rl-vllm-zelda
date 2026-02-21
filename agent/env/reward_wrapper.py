@@ -498,6 +498,17 @@ class RewardWrapper(gym.Wrapper):
         self._milestone_achieved_this_step = False
         reward = self._compute_reward(obs, info, terminated)
 
+        # Log new room discoveries — helps diagnose exploration bottlenecks
+        new_rooms = self._coverage.unique_rooms
+        if new_rooms > prev_rooms:
+            room_id = info.get("room_id", 0)
+            active_group = info.get("active_group", 0)
+            logger.info(
+                "NEW ROOM: group=%d room=%d (row=%d, col=%d) | total=%d | bonus=%.1f",
+                active_group, room_id, room_id // 16, room_id % 16,
+                new_rooms, self._coverage.bonus_per_room,
+            )
+
         # Tile-based stagnation — reset counter when ANY new tile is found.
         # Room-based stagnation was too aggressive: the agent got truncated
         # while transiting through known rooms to reach new areas.  Tile-based
@@ -505,7 +516,6 @@ class RewardWrapper(gym.Wrapper):
         # still ending episodes where the agent circles the same tiles.
         # Dialog steps don't count toward stagnation — NPC dialog is
         # productive (quest progression) and shouldn't trigger truncation.
-        new_rooms = self._coverage.unique_rooms
         new_tiles = self._coverage.total_tiles
         dialog_active = info.get("dialog_active", False)
         is_transitioning = info.get("transitioning", False)

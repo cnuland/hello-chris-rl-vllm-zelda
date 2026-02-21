@@ -85,7 +85,12 @@ spec:
         - name: DIRECTIONAL_BONUS
           value: "20"
         - name: GRID_EXPLORATION
-          value: "0.02"
+          value: "0.05"
+        # New room discovery bonus — flat reward per unique room visited.
+        # Must be competitive with directional bonus (20) to motivate detours
+        # around obstacles like cliffs.  Default code value is 10.0.
+        - name: NEW_ROOM_BONUS
+          value: "15"
         # PPO core — increase updates per batch for stronger policy learning
         - name: UPDATE_EPOCHS
           value: "4"
