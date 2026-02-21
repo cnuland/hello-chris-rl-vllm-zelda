@@ -213,7 +213,7 @@ class StreamWrapper(gym.Wrapper):
                 "extra": f"rooms: {len(self._visited_rooms)}",
             },
             "pos_data": [
-                {"x": c["x"], "y": c["y"], "z": c["z"], "notable": c["notable"]}
+                {"x": c["x"], "y": c["y"], "z": c["z"], "direction": c["direction"], "notable": c["notable"]}
                 for c in self._coord_buffer
             ],
         })

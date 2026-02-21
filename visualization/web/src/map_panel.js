@@ -16,11 +16,12 @@
  * License: MIT
  */
 
-import { Container, Graphics, Sprite, Assets } from "pixi.js";
+import { Container, Graphics, Sprite, Assets, Texture, Rectangle } from "pixi.js";
 
 const TILE_SIZE = 16;
 const TTL_MS = 15000; // 15 seconds before trail positions fade out
-const CURSOR_RADIUS = 5;
+const CURSOR_RADIUS = 10;
+const SPRITE_SCALE = 1.5; // Scale up Link sprite for visibility
 
 // --- Color utilities ---
 
@@ -97,28 +98,69 @@ class PosSeen {
 }
 
 /**
- * Agent cursor — a bright colored circle showing an agent's current position.
+ * Build the 4 directional textures from the link_sprites.png sprite sheet.
+ *
+ * Sheet layout: [down 16×16] [up 16×16] [right 16×16] [left 16×16]
+ * Game direction codes: 0=up, 1=right, 2=down, 3=left
+ *
+ * Returns a Map<directionCode, Texture>.
+ */
+let _dirTextures = null;
+function getDirectionTextures() {
+  if (_dirTextures) return _dirTextures;
+
+  const baseTex = Assets.get("link_sprites");
+  if (!baseTex) return null;
+
+  // Sprite sheet order: [down, up, right, left] at x = [0, 16, 32, 48]
+  // Map to game direction codes: 0=up, 1=right, 2=down, 3=left
+  const sheetOrder = { 2: 0, 0: 1, 1: 2, 3: 3 }; // gameDir → sheetIndex
+
+  _dirTextures = new Map();
+  for (const [gameDir, sheetIdx] of Object.entries(sheetOrder)) {
+    const frame = new Rectangle(sheetIdx * 16, 0, 16, 16);
+    const tex = new Texture({ source: baseTex.source, frame });
+    _dirTextures.set(Number(gameDir), tex);
+  }
+  return _dirTextures;
+}
+
+/**
+ * Agent cursor — a Link sprite showing an agent's current position and
+ * facing direction, with a colored glow ring for agent identification.
  */
 class AgentCursor {
   constructor(mapPanel, envId, color) {
     this.mapPanel = mapPanel;
     this.envId = envId;
     this.color = color;
+    this.currentDir = 2; // default: facing down
 
     this.container = new Container();
 
-    // Outer glow ring
+    // Colored glow ring behind the sprite for agent identification
     this.glow = new Graphics();
-    this.glow.circle(0, 0, CURSOR_RADIUS + 3);
-    this.glow.fill({ color: this.color, alpha: 0.3 });
+    this.glow.circle(0, 0, CURSOR_RADIUS);
+    this.glow.fill({ color: this.color, alpha: 0.35 });
+    this.glow.stroke({ color: this.color, width: 1.5, alpha: 0.7 });
     this.container.addChild(this.glow);
 
-    // Main dot
-    this.dot = new Graphics();
-    this.dot.circle(0, 0, CURSOR_RADIUS);
-    this.dot.fill({ color: this.color, alpha: 1.0 });
-    this.dot.stroke({ color: 0xffffff, width: 1.5, alpha: 0.9 });
-    this.container.addChild(this.dot);
+    // Link sprite (directional)
+    const textures = getDirectionTextures();
+    if (textures) {
+      this.sprite = new Sprite(textures.get(2)); // default: down
+      this.sprite.anchor.set(0.5, 0.5);
+      this.sprite.scale.set(SPRITE_SCALE);
+      this.container.addChild(this.sprite);
+    } else {
+      // Fallback: colored dot if sprite sheet not loaded
+      this.sprite = null;
+      const dot = new Graphics();
+      dot.circle(0, 0, 5);
+      dot.fill({ color: this.color, alpha: 1.0 });
+      dot.stroke({ color: 0xffffff, width: 1.5, alpha: 0.9 });
+      this.container.addChild(dot);
+    }
 
     mapPanel.cursorContainer.addChild(this.container);
   }
@@ -126,6 +168,17 @@ class AgentCursor {
   moveTo(worldX, worldY) {
     this.container.x = worldX * TILE_SIZE + TILE_SIZE / 2;
     this.container.y = worldY * TILE_SIZE + TILE_SIZE / 2;
+  }
+
+  setDirection(dir) {
+    if (dir === this.currentDir || !this.sprite) return;
+    const textures = getDirectionTextures();
+    if (!textures) return;
+    const tex = textures.get(dir);
+    if (tex) {
+      this.sprite.texture = tex;
+      this.currentDir = dir;
+    }
   }
 
   destroy() {
@@ -174,9 +227,9 @@ export class MapPanel {
   }
 
   /**
-   * Update an agent's cursor position (or create it if new).
+   * Update an agent's cursor position and direction (or create it if new).
    */
-  updateAgent(envId, worldX, worldY, colorStr) {
+  updateAgent(envId, worldX, worldY, colorStr, direction) {
     let cursor = this.agentCursors.get(envId);
     if (!cursor) {
       const color = parseColor(colorStr);
@@ -184,6 +237,9 @@ export class MapPanel {
       this.agentCursors.set(envId, cursor);
     }
     cursor.moveTo(worldX, worldY);
+    if (direction !== undefined) {
+      cursor.setDirection(direction);
+    }
   }
 
   /**

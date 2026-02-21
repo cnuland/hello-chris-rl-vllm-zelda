@@ -62,6 +62,7 @@ async function init() {
   // Preload assets
   await Assets.load([
     { alias: "bg_overworld", src: "assets/overworld.png" },
+    { alias: "link_sprites", src: "assets/link_sprites.png" },
   ]);
 
   // Create UI panels
@@ -104,6 +105,7 @@ function connectWebSocket() {
           for (const element of data.pos_data) {
             element._envId = meta.env_id ?? "unknown";
             element._color = meta.color || "";
+            element._direction = element.direction ?? 2; // default: facing down
             dataStream.push(element);
           }
           totalReceived += data.pos_data.length;
@@ -162,12 +164,13 @@ function processDataStream() {
       element.notable || ""
     );
 
-    // Update per-agent cursor position (bright colored dot)
+    // Update per-agent cursor position (Link sprite)
     mapPanel.updateAgent(
       element._envId,
       element.x,
       element.y,
-      element._color
+      element._color,
+      element._direction
     );
 
     // Only show meaningful events in the sidebar — skip new_room
