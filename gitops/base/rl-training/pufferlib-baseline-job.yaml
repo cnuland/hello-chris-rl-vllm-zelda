@@ -93,6 +93,11 @@ spec:
           value: "0.1"
         - name: GAMMA
           value: "0.998"
+        # Button entropy — separate higher coefficient on button action head
+        # (NOP/A/B) to prevent collapse to always-NOP.  Without this the agent
+        # never learns to use the sword because movement rewards dominate.
+        - name: BUTTON_ENTROPY_COEF
+          value: "0.02"
         # Directional target — Maku Tree area (default, advisor can override)
         - name: DIRECTIONAL_TARGET_ROW
           value: "5"

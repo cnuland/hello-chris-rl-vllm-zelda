@@ -449,6 +449,16 @@ def run_training_epoch(
         "baseline_captured": False,
     }
 
+    # Separate button entropy coefficient — prevents the button action head
+    # (NOP/A/B) from collapsing to always-NOP.  Movement rewards dominate
+    # the loss landscape, so without this the 3-option button head has no
+    # gradient signal to maintain exploration.  Default 0.02 = 2× the typical
+    # main entropy coeff, applied ONLY to the button dimension.
+    button_entropy_coeff = float(os.getenv("BUTTON_ENTROPY_COEF", "0.02"))
+
+    # Button action tracking for diagnostics
+    button_action_counts = np.zeros(3, dtype=np.int64)  # NOP, A, B
+
     global_step = 0
     start_time = time.time()
     log_interval = max(1, num_iterations // 20)
@@ -472,6 +482,11 @@ def run_training_epoch(
             logprobs_buf[step] = logprob
             values_buf[step] = value
             dones_buf[step] = done
+
+            # Track button action distribution (dimension 1: NOP=0, A=1, B=2)
+            btn_acts = action[:, 1].cpu().numpy()
+            for b in btn_acts:
+                button_action_counts[int(b)] += 1
 
             next_obs_np, reward_np, terminal_np, truncated_np, infos = vecenv.step(
                 action.cpu().numpy()
@@ -594,6 +609,8 @@ def run_training_epoch(
         total_pg_loss = 0.0
         total_v_loss = 0.0
         total_entropy = 0.0
+        total_button_entropy = 0.0
+        total_movement_entropy = 0.0
         total_approx_kl = 0.0
         num_updates = 0
 
@@ -614,7 +631,10 @@ def run_training_epoch(
                     d.log_prob(mb_acts[:, i])
                     for i, d in enumerate(new_dists)
                 )
-                entropy = sum(d.entropy() for d in new_dists)
+                # Separate entropy for movement and button heads
+                movement_entropy = new_dists[0].entropy()
+                button_entropy = new_dists[1].entropy()
+                entropy = movement_entropy + button_entropy
 
                 logratio = new_logprob - b_logprobs[mb_idx]
                 ratio = logratio.exp()
@@ -638,10 +658,16 @@ def run_training_epoch(
                 # Value loss
                 v_loss = 0.5 * ((new_value - b_returns[mb_idx]) ** 2).mean()
 
-                # Entropy bonus
+                # Entropy bonus — main coefficient applies to total entropy,
+                # plus a separate higher coefficient on button entropy alone
+                # to prevent the button head from collapsing to always-NOP.
                 entropy_loss = entropy.mean()
+                button_entropy_loss = button_entropy.mean()
 
-                loss = pg_loss - entropy_coeff * entropy_loss + vf_coef * v_loss
+                loss = (pg_loss
+                        - entropy_coeff * entropy_loss
+                        - button_entropy_coeff * button_entropy_loss
+                        + vf_coef * v_loss)
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -651,6 +677,8 @@ def run_training_epoch(
                 total_pg_loss += pg_loss.item()
                 total_v_loss += v_loss.item()
                 total_entropy += entropy_loss.item()
+                total_button_entropy += button_entropy_loss.item()
+                total_movement_entropy += movement_entropy.mean().item()
                 total_approx_kl += approx_kl.item()
                 num_updates += 1
 
@@ -660,20 +688,32 @@ def run_training_epoch(
             sps = global_step / elapsed if elapsed > 0 else 0
             recent_rewards = completed_rewards[-50:] if completed_rewards else [0]
             recent_lengths = completed_lengths[-50:] if completed_lengths else [0]
+            avg_ent = total_entropy / max(num_updates, 1)
+            avg_move_ent = total_movement_entropy / max(num_updates, 1)
+            avg_btn_ent = total_button_entropy / max(num_updates, 1)
             logger.info(
                 "Epoch %d | Iter %d/%d | Steps: %s/%s | SPS: %.0f | "
                 "Reward: %.1f | EpLen: %.0f | PgLoss: %.4f | VLoss: %.4f | "
-                "Entropy: %.3f | KL: %.4f | Rooms: %d | Tiles: %d",
+                "Entropy: %.3f (move=%.3f btn=%.3f) | KL: %.4f | Rooms: %d | Tiles: %d",
                 epoch, iteration, num_iterations,
                 f"{global_step:,}", f"{epoch_steps:,}", sps,
                 np.mean(recent_rewards), np.mean(recent_lengths),
                 total_pg_loss / max(num_updates, 1),
                 total_v_loss / max(num_updates, 1),
-                total_entropy / max(num_updates, 1),
+                avg_ent, avg_move_ent, avg_btn_ent,
                 total_approx_kl / max(num_updates, 1),
                 milestones["max_rooms"],
                 milestones["max_tiles"],
             )
+            # Button action distribution — diagnose if A/B are being used
+            total_btns = button_action_counts.sum()
+            if total_btns > 0:
+                logger.info(
+                    "  Buttons: NOP=%.1f%% A=%.1f%% B=%.1f%%",
+                    100 * button_action_counts[0] / total_btns,
+                    100 * button_action_counts[1] / total_btns,
+                    100 * button_action_counts[2] / total_btns,
+                )
 
     # ---- Epoch summary ----
     elapsed = time.time() - start_time
@@ -979,7 +1019,7 @@ def main():
 
         # Phase 2: Evaluation + reward model + reward advisor
         if run_eval:
-            run_evaluation(epoch)
+            run_evaluation(epoch, milestones=metadata.get("milestones", {}))
             rm_path = download_reward_model(epoch)
 
             epoch_metadata = metadata
@@ -990,7 +1030,9 @@ def main():
             except Exception:
                 pass
 
-            advised_config = run_reward_advisor(epoch, epoch_metadata)
+            advised_config = run_reward_advisor(
+                epoch, epoch_metadata, base_reward_config=reward_config,
+            )
             if advised_config:
                 reward_config = advised_config
                 logger.info("Next epoch uses LLM-adjusted reward config")

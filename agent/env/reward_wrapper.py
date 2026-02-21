@@ -167,6 +167,14 @@ class RewardWrapper(gym.Wrapper):
         self._directives = cfg.get("directives", [])
         self._triggered_directives: set[str] = set()
 
+        # Sword interaction bonus — per-room reward for pressing A near
+        # obstacles or in key areas.  Prevents button entropy collapse by
+        # giving the agent a gradient signal that "A button does something."
+        # Capped to once per (group, room) to prevent spamming.
+        self._sword_use_bonus = cfg.get("sword_use", 0.5)
+        self._a_press_rooms: set[tuple[int, int]] = set()
+        self._current_button = 0  # 0=NOP, 1=A, 2=B
+
         # Area-based exploration boost — multiplies coverage reward by
         # active_group to guide exploration toward key progression areas.
         # Inspired by pokemonred_puffer's map-specific exploration weights.
@@ -456,6 +464,8 @@ class RewardWrapper(gym.Wrapper):
         self._gate_slashed = False
         self._maku_rooms_visited.clear()
         self._captured_milestones.clear()
+        self._a_press_rooms.clear()
+        self._current_button = 0
         if self._shaping:
             self._shaping.reset()
 
@@ -476,6 +486,10 @@ class RewardWrapper(gym.Wrapper):
         return obs, info
 
     def step(self, action) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+        # Extract button action for sword interaction bonus
+        action_arr = np.asarray(action).flatten()
+        self._current_button = int(action_arr[1]) if len(action_arr) > 1 else 0
+
         obs, _, terminated, truncated, info = self.env.step(action)
 
         # Track rooms before reward computation for stagnation detection
@@ -754,6 +768,25 @@ class RewardWrapper(gym.Wrapper):
                     self._prev_maku_stage, maku_stage, self._maku_stage_bonus,
                 )
             self._prev_maku_stage = maku_stage
+
+        # --- Sword interaction bonus ---
+        # Reward pressing A (sword) in new rooms to encourage button usage.
+        # Without this, the button policy head collapses to NOP since movement
+        # dominates reward.  Per-(group, room) cap prevents spamming.
+        if self._current_button == 1:  # A button pressed
+            room_key = (active_group, room_id)
+            if room_key not in self._a_press_rooms:
+                self._a_press_rooms.add(room_key)
+                bonus = self._sword_use_bonus
+                # Triple bonus in Maku Tree area — gate needs slashing
+                if active_group == 2:
+                    bonus *= 3.0
+                # Double bonus when pushing against obstacle (slash it!)
+                elif hasattr(self.env, "_read"):
+                    pushing = self.env._read(LINK_PUSHING_DIRECTION)
+                    if pushing != 0xFF and not info.get("transitioning", False):
+                        bonus *= 2.0
+                reward += bonus
 
         # --- LLM Advisor Directives ---
         # Process structured directives from the reward advisor:

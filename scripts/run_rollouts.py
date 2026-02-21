@@ -683,7 +683,11 @@ def download_reward_model(epoch):
         return ""
 
 
-def run_reward_advisor(epoch: int, epoch_metadata: dict) -> dict | None:
+def run_reward_advisor(
+    epoch: int,
+    epoch_metadata: dict,
+    base_reward_config: dict | None = None,
+) -> dict | None:
     """Run the LLM reward advisor to adjust reward weights for the next epoch.
 
     Returns an updated reward config dict that includes:
@@ -695,6 +699,9 @@ def run_reward_advisor(epoch: int, epoch_metadata: dict) -> dict | None:
     Args:
         epoch: Current epoch number (just completed).
         epoch_metadata: Training metadata dict with reward_mean, milestones, etc.
+        base_reward_config: Current reward config (including env-var overrides).
+            If provided, advisor multipliers are applied on top of these values
+            instead of the code defaults, preserving user-specified tuning.
 
     Returns:
         Updated reward config dict, or None if advisor fails/skips.
@@ -748,8 +755,15 @@ def run_reward_advisor(epoch: int, epoch_metadata: dict) -> dict | None:
             llm.close()
             return None
 
-        # Apply multipliers to base config
-        base = RewardConfig().model_dump()
+        # Apply multipliers to base config — use env-var overrides as the
+        # base when available, so user-specified tuning (DISTANCE_BONUS,
+        # DIRECTIONAL_BONUS, GRID_EXPLORATION, TIME_PENALTY, etc.) is
+        # preserved across epochs instead of being silently replaced by
+        # code defaults.
+        if base_reward_config:
+            base = {**RewardConfig().model_dump(), **base_reward_config}
+        else:
+            base = RewardConfig().model_dump()
         updated = advisor.apply_multipliers(base, output.multipliers)
 
         # Inject directional target into config (consumed by RewardWrapper)
@@ -964,7 +978,9 @@ def main():
                 logger.info("Next epoch runs without shaping")
 
             # Phase 3b: LLM reward advisor — adjust reward weights for next epoch
-            advised_config = run_reward_advisor(epoch, epoch_metadata)
+            advised_config = run_reward_advisor(
+                epoch, epoch_metadata, base_reward_config=reward_config,
+            )
             if advised_config:
                 # Extract weight adjustments for next evaluation pass
                 weight_overrides = advised_config.pop("_weight_adjustments", None)
