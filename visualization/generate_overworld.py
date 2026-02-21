@@ -457,11 +457,14 @@ def walk_to_room(pyboy, save_state_bytes: bytes, room_id: int,
     the correct overworld tiles in VRAM.
 
     Strategy:
-      1. Warp to an adjacent room using the normal fadeout approach.
-      2. Wait for the game to fully load and fade back in (~120 frames).
+      1. Warp to an adjacent room using a normal transition (LCD stays on,
+         game enters playable state after fade-in).
+      2. Wait for the game to fully load and fade back in (~180 frames).
       3. Hold a direction button to walk Link toward the target room edge.
-      4. Wait for the screen transition to complete.
-      5. Render VRAM with the correct overworld tiles.
+      4. Wait for the screen scroll transition to complete.
+      5. Hide sprites via OAM zeroing and capture the screen directly
+         (VRAM rendering doesn't work here because the BG tilemap wraps
+         during scroll transitions, offsetting tile positions).
 
     Tries each neighbor direction (left, top, right, bottom) until one works.
 
@@ -519,7 +522,7 @@ def walk_to_room(pyboy, save_state_bytes: bytes, room_id: int,
         pyboy.memory[WARP_DEST_ROOM] = neighbor_id
         pyboy.memory[WARP_TRANSITION] = 0x00
         pyboy.memory[WARP_DEST_POS] = spawn_pos
-        pyboy.memory[WARP_TRANSITION2] = 0x03  # Fadeout (full tile loading)
+        pyboy.memory[WARP_TRANSITION2] = 0x00  # Normal transition (fade-in, LCD on)
 
         neighbor_loaded = False
         for frame in range(500):
@@ -533,8 +536,10 @@ def walk_to_room(pyboy, save_state_bytes: bytes, room_id: int,
                 pyboy.memory[KEYS_PRESSED] = 0x00
                 pyboy.memory[KEYS_JUST_PRESSED] = 0x00
 
-                # Wait for fade-in to complete so the game is playable
-                for _ in range(settle_frames):
+                # Wait for full fade-in to complete so game is playable.
+                # Normal transition (0x00) needs ~60 frames for fade-in
+                # plus extra for scripts to settle.
+                for _ in range(max(settle_frames, 180)):
                     pyboy.tick()
 
                 # Verify neighbor didn't also warp us away
@@ -587,9 +592,22 @@ def walk_to_room(pyboy, save_state_bytes: bytes, room_id: int,
             )
             continue
 
-        # --- Step 4: Render from VRAM ---
-        logger.info(f"  Room {room_id}: walk successful, rendering VRAM")
-        return _render_room_from_vram(pyboy)
+        # --- Step 4: Capture screen (not VRAM) ---
+        # After a scroll transition, the BG tilemap in VRAM wraps around
+        # (SCX/SCY offsets), so _render_room_from_vram reads wrong tiles.
+        # Instead, capture the LCD screen directly and crop the HUD.
+        logger.info(f"  Room {room_id}: walk successful, capturing screen")
+
+        # Hide Link's sprite by zeroing all OAM Y positions
+        for i in range(OAM_COUNT):
+            pyboy.memory[OAM_START + i * 4] = 0
+        pyboy.tick()  # Render one frame without sprites
+
+        screen_img = pyboy.screen.image.convert("RGB")
+        room_frame = np.array(
+            screen_img.crop((0, HUD_HEIGHT, ROOM_W, HUD_HEIGHT + ROOM_H))
+        )
+        return room_frame
 
     logger.warning(f"Room {room_id}: all walk-from-neighbor attempts failed")
     return None
@@ -638,6 +656,13 @@ def generate_overworld(rom_path: Path, state_path: Path,
     map_h = GRID_ROWS * ROOM_H  # 2048
     composite = Image.new("RGB", (map_w, map_h), color=(0, 0, 0))
 
+    # Rooms whose tiles depend on story progression and may not render
+    # correctly from the current save state.  Patched from the community
+    # reference map (VGMaps.com, maps by TerraEsperZ).
+    STORY_DEPENDENT_ROOMS = {217}  # Maku Tree entrance
+
+    community_map = None  # Lazy-loaded only if needed
+
     success_count = 0
     fail_count = 0
     room_metadata = {}
@@ -678,6 +703,28 @@ def generate_overworld(rom_path: Path, state_path: Path,
                 pyboy, save_state_bytes, room_id,
                 group=group, season=season,
             )
+
+        # Community map patch for story-dependent rooms whose tiles
+        # don't match the current save state (e.g. Maku Tree appears
+        # only after a story event, but the pre-maku state shows a field)
+        if room_id in STORY_DEPENDENT_ROOMS:
+            if community_map is None:
+                logger.info("  Downloading community reference map for patching...")
+                try:
+                    community_map = download_community_map("default")
+                except Exception as e:
+                    logger.warning(f"  Could not download community map: {e}")
+            if community_map is not None:
+                x_off = col * ROOM_W
+                y_off = row * ROOM_H
+                patch = community_map.crop(
+                    (x_off, y_off, x_off + ROOM_W, y_off + ROOM_H)
+                )
+                room_frame = np.array(patch.convert("RGB"))
+                logger.info(
+                    f"  Room {room_id}: patched from community map "
+                    f"(story-dependent tiles)"
+                )
 
         if room_frame is not None:
             room_img = Image.fromarray(room_frame)
