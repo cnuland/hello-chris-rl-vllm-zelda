@@ -95,6 +95,28 @@ app.get("/health", (req, res) => {
   });
 });
 
+// --- Debug: dump latest position per agent ---
+app.get("/debug/positions", (req, res) => {
+  const positions = {};
+  for (const [envId, msg] of latestByAgent) {
+    try {
+      const data = JSON.parse(msg);
+      const last = data.pos_data?.[data.pos_data.length - 1];
+      if (last) {
+        positions[envId] = {
+          x: last.x, y: last.y,
+          fx: last.fx, fy: last.fy,
+          z: last.z,
+          room_id: last.room_id,
+          tile_x: last.tile_x, tile_y: last.tile_y,
+          direction: last.direction,
+        };
+      }
+    } catch (e) { /* skip */ }
+  }
+  res.json(positions);
+});
+
 // --- Start server ---
 app.listen(PORT, () => {
   console.log(`Zelda OoS Map Relay Server running on port ${PORT}`);
