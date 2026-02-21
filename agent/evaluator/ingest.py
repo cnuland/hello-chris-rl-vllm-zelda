@@ -8,10 +8,11 @@ Pipeline:
   4. Self-consistency M=3 (three passes), majority vote.
   5. Write scores.jsonl back to MinIO.
 
-Judge model mapping:
-  - state (qwen25-7b):     progress, dialog, efficiency scoring
-  - puzzle (qwen25-32b):   puzzle scoring
-  - vision (qwen25-vl-32b): novelty scoring (frame analysis)
+Judge model mapping (vision-primary architecture):
+  - vision (qwen25-vl-32b): PRIMARY — multi-frame analysis scoring
+    progress, novelty, efficiency, dialog (~70% effective weight)
+  - state (qwen25-7b):      cross-validator for progress, dialog, efficiency
+  - puzzle (qwen25-32b):    puzzle scoring (text-only, no vision blend)
 """
 
 from __future__ import annotations
@@ -37,46 +38,50 @@ DEFAULT_RUBRIC_WEIGHTS = {
 }
 
 # Phase-specific rubric weights — shift emphasis based on what matters
-# most at each stage of the game.  Key design decisions:
-#   - pre_sword: novelty high (0.25) because exploration is the core task
-#   - pre_maku: progress high (0.45) because directional movement matters
-#   - maku_interaction: dialog jumps to 0.40 — this is THE critical blocker
-#   - dungeon: puzzle at 0.40 because puzzles ARE the dungeon gameplay
+# most at each stage of the game.  These are the DIMENSION importance
+# weights; the vision/text split within each dimension is handled by
+# DIMENSION_BLEND separately.
+#
+# Key design decisions:
+#   - pre_sword: novelty + exploration (0.30) to encourage finding Hero's Cave
+#   - pre_maku: progress (0.35) + efficiency (0.20) for directional travel
+#   - maku_interaction: dialog (0.40) — THE critical Maku Tree blocker
+#   - dungeon: puzzle (0.30) + efficiency (0.25) for puzzle-solving gameplay
 PHASE_WEIGHTS: dict[str, dict[str, float]] = {
     "pre_sword": {
         "progress": 0.30,
+        "novelty": 0.30,
         "dialog": 0.10,
-        "puzzle": 0.15,
-        "novelty": 0.25,
         "efficiency": 0.20,
+        "puzzle": 0.10,
     },
     "pre_maku": {
-        "progress": 0.45,
+        "progress": 0.35,
+        "novelty": 0.25,
         "dialog": 0.10,
+        "efficiency": 0.20,
         "puzzle": 0.10,
-        "novelty": 0.20,
-        "efficiency": 0.15,
     },
     "maku_interaction": {
         "progress": 0.20,
+        "novelty": 0.10,
         "dialog": 0.40,
-        "puzzle": 0.20,
-        "novelty": 0.05,
         "efficiency": 0.15,
+        "puzzle": 0.15,
     },
     "pre_dungeon": {
-        "progress": 0.45,
-        "dialog": 0.05,
-        "puzzle": 0.10,
+        "progress": 0.35,
         "novelty": 0.25,
-        "efficiency": 0.15,
+        "dialog": 0.05,
+        "efficiency": 0.25,
+        "puzzle": 0.10,
     },
     "dungeon": {
         "progress": 0.25,
-        "dialog": 0.05,
-        "puzzle": 0.40,
         "novelty": 0.15,
-        "efficiency": 0.15,
+        "dialog": 0.05,
+        "efficiency": 0.25,
+        "puzzle": 0.30,
     },
 }
 
@@ -97,9 +102,15 @@ PHASE_PROMPTS: dict[str, dict[str, str]] = {
             "slashing bushes to find cave entrances)."
         ),
         "vision": (
-            "Score novelty based on whether the screenshot shows new areas "
-            "the agent hasn't visited before. Indoor areas and cave entrances "
-            "are especially valuable."
+            "EARLY GAME — the agent needs to explore and find the Hero's Cave. "
+            "PROGRESS: Score highly if frames show the agent moving through "
+            "different screens, especially entering indoor/cave areas. "
+            "NOVELTY: Score highly if frames show visually distinct areas — "
+            "caves, indoor tile sets, forest clearings the agent hasn't seen. "
+            "EFFICIENCY: Score highly if the agent moves purposefully between "
+            "frames (positions change meaningfully). Score low if Link stands "
+            "still or oscillates in the same spot across frames. "
+            "DIALOG: Score only if a dialog box is visible on screen."
         ),
     },
     "pre_maku": {
@@ -116,9 +127,18 @@ PHASE_PROMPTS: dict[str, dict[str, str]] = {
             "progress-enabling environmental interaction."
         ),
         "vision": (
-            "Score novelty highly for screenshots showing new overworld areas, "
-            "especially areas to the east and north. The Maku Tree area has "
-            "distinctive grove/tree visuals."
+            "OVERWORLD TRAVEL — the agent has the sword and must reach the "
+            "Maku Tree (northeast). "
+            "PROGRESS: Score highly if frames show the agent traversing east "
+            "and north through overworld screens. New screens appearing across "
+            "the frame sequence = strong progress. Score low if all frames "
+            "show the same screen. "
+            "NOVELTY: Score highly for new overworld areas, especially eastern "
+            "and northern screens with village buildings, trees, water. "
+            "EFFICIENCY: Score highly if frame-to-frame movement shows clear "
+            "directional intent (heading east/north). Score low for wandering "
+            "back and forth or circling. "
+            "DIALOG: Score if any frame shows a text dialog box on screen."
         ),
     },
     "maku_interaction": {
@@ -137,10 +157,15 @@ PHASE_PROMPTS: dict[str, dict[str, str]] = {
             "objects in group 2 highly."
         ),
         "vision": (
-            "At the Maku Tree, the screen should show the grove area with "
-            "the large tree NPC. Score screenshots showing the Maku Tree "
-            "and dialog boxes very highly. Score screenshots of the overworld "
-            "(outside group 2) low."
+            "MAKU TREE AREA — dialog interaction is critical here. "
+            "PROGRESS: Score highly if frames show the grove area with the "
+            "large Maku Tree NPC. Score low if frames show overworld outside "
+            "the grove. "
+            "NOVELTY: Score for exploring new rooms within the grove area. "
+            "EFFICIENCY: Score highly if the agent stays in the grove and "
+            "approaches the tree NPC. Score low if leaving and re-entering. "
+            "DIALOG: Score VERY HIGHLY (0.8-1.0) if ANY frame shows a dialog "
+            "box on screen — this is THE critical objective at this phase."
         ),
     },
     "pre_dungeon": {
@@ -156,9 +181,15 @@ PHASE_PROMPTS: dict[str, dict[str, str]] = {
             "Score any puzzle-solving behavior that opens paths westward."
         ),
         "vision": (
-            "Score novelty for new western overworld areas. The dungeon "
-            "entrance is a distinctive cave opening. Score dungeon interior "
-            "screenshots very highly."
+            "HEADING TO DUNGEON — the agent needs to travel west. "
+            "PROGRESS: Score highly if frames show westward overworld travel "
+            "or the distinctive dungeon cave entrance. Score very highly if "
+            "any frame shows a dungeon interior tile set. "
+            "NOVELTY: Score highly for new western areas and especially "
+            "dungeon entrances or interiors. "
+            "EFFICIENCY: Score highly for clear westward movement across "
+            "frames. Score low for meandering or retracing. "
+            "DIALOG: Score only if dialog boxes appear on screen."
         ),
     },
     "dungeon": {
@@ -173,14 +204,55 @@ PHASE_PROMPTS: dict[str, dict[str, str]] = {
             "defeating mini-bosses. Score any puzzle interaction very highly."
         ),
         "vision": (
-            "Dungeon interiors have distinctive tile patterns and objects. "
-            "Score screenshots showing new dungeon rooms, boss encounters, "
-            "puzzle elements (blocks, switches), and treasure chests highly."
+            "DUNGEON INTERIOR — puzzle-solving and exploration are key. "
+            "PROGRESS: Score highly if frames show different dungeon rooms, "
+            "defeated enemies, opened chests, keys collected. "
+            "NOVELTY: Score highly for new dungeon rooms with distinct tile "
+            "patterns, puzzle elements (blocks, switches, locked doors). "
+            "EFFICIENCY: Score highly if the agent moves through rooms "
+            "purposefully. Score low if stuck in one room across all frames. "
+            "DIALOG: Score if dialog boxes appear (item descriptions, etc.)."
         ),
     },
 }
 
 SCORE_KEYS = list(DEFAULT_RUBRIC_WEIGHTS.keys())
+
+# Number of frames to sample from each segment for multi-frame vision analysis.
+NUM_VISION_FRAMES = 7
+
+# Per-dimension blending of vision + text judge scores.
+# Vision is the primary scorer for progress, novelty, dialog, efficiency.
+# Puzzle remains text-only (requires game-mechanic knowledge, not pixel inspection).
+DIMENSION_BLEND: dict[str, dict[str, float]] = {
+    "progress":   {"vision": 0.75, "text": 0.25},
+    "novelty":    {"vision": 0.85, "text": 0.15},
+    "dialog":     {"vision": 0.60, "text": 0.40},
+    "efficiency": {"vision": 0.80, "text": 0.20},
+    "puzzle":     {"vision": 0.00, "text": 1.00},
+}
+
+
+def _select_segment_frames(frame_keys: list[str], num_frames: int = NUM_VISION_FRAMES) -> list[str]:
+    """Select frames spanning a segment: first, last, + evenly spaced middle.
+
+    Provides temporal coverage of the gameplay segment for multi-frame
+    vision analysis without sending every saved PNG.
+    """
+    n = len(frame_keys)
+    if n <= num_frames:
+        return list(frame_keys)
+
+    # Always include first and last
+    indices = {0, n - 1}
+
+    # Fill remaining slots evenly from the middle
+    remaining = num_frames - 2
+    step = (n - 2) / (remaining + 1)
+    for i in range(1, remaining + 1):
+        indices.add(int(round(i * step)))
+
+    return [frame_keys[i] for i in sorted(indices)[:num_frames]]
 
 
 class EvaluatorIngest:
@@ -247,22 +319,33 @@ class EvaluatorIngest:
     def evaluate_segment(self, segment_data: dict[str, Any]) -> dict[str, Any]:
         """Evaluate a single segment with M=3 self-consistency.
 
-        Uses multiple judge models:
-          - State judge (qwen25-7b) for progress, dialog, efficiency
-          - Puzzle judge (qwen25-32b) for puzzle scoring
-          - Vision judge (qwen25-vl-32b) for novelty (if frames available)
+        Uses vision-primary architecture:
+          - Vision judge (qwen25-vl-32b): PRIMARY — multi-frame scoring of
+            progress, novelty, efficiency, dialog (~70% effective weight)
+          - State judge (qwen25-7b):  cross-validator for progress, dialog, efficiency
+          - Puzzle judge (qwen25-32b): puzzle scoring (text-only)
+
+        Per-dimension scores are blended via DIMENSION_BLEND, then weighted
+        by phase-specific PHASE_WEIGHTS for the final aggregate score.
         """
-        all_scores: list[dict[str, float]] = []
+        all_scores: list[dict[str, Any]] = []
 
         for trial in range(self._m):
             scores = self._judge_once(segment_data, trial)
             all_scores.append(scores)
 
         # Majority vote: median per dimension
-        final_scores = {}
+        final_scores: dict[str, float] = {}
         for key in SCORE_KEYS:
             values = [s.get(key, 0.0) for s in all_scores]
             final_scores[key] = statistics.median(values)
+
+        # Collect vision rationale from the first trial that has one
+        vision_rationale = ""
+        for s in all_scores:
+            if s.get("_vision_rationale"):
+                vision_rationale = s["_vision_rationale"]
+                break
 
         # Weighted aggregate using phase-specific weights
         weights = self._get_weights()
@@ -275,6 +358,7 @@ class EvaluatorIngest:
             "weights_used": weights,
             "weighted_score": weighted,
             "rationale": self._generate_rationale(final_scores),
+            "vision_rationale": vision_rationale,
             "raw_trials": all_scores,
         }
         return result
@@ -305,22 +389,55 @@ class EvaluatorIngest:
             return {}
 
         def _call_vision():
-            frame_b64 = segment_data.get("frame_b64")
-            if not frame_b64:
-                return {}
+            # Prefer multi-frame list; fall back to single frame
+            frames = segment_data.get("frames_b64") or []
+            if not frames:
+                single = segment_data.get("frame_b64")
+                if single:
+                    frames = [single]
+                else:
+                    return {}
+
             vision_prompt = self._build_vision_prompt(segment_data)
-            game_state = {}
-            if segment_data.get("states"):
-                mid = len(segment_data["states"]) // 2
-                game_state = segment_data["states"][mid].get("state", {})
-            result = self._llm.vision(frame_b64, game_state, prompt=vision_prompt)
+
+            # Build a compact game-state summary from first + last state
+            game_state: dict[str, Any] = {}
+            states = segment_data.get("states", [])
+            if states:
+                first_s = states[0].get("state", {})
+                last_s = states[-1].get("state", {})
+                game_state = {
+                    "start_room": first_s.get("room_id"),
+                    "end_room": last_s.get("room_id"),
+                    "active_group": last_s.get("active_group"),
+                    "has_sword": last_s.get("has_sword", False),
+                    "total_reward": segment_data.get("total_reward", 0),
+                }
+
+            result = self._llm.vision(frames, game_state, prompt=vision_prompt)
+
+            partial: dict[str, Any] = {}
+            vision_dims = ["progress", "novelty", "efficiency", "dialog"]
             if "scores" in result:
-                return {"novelty": float(result["scores"].get("novelty", 0.5))}
-            elif "novelty" in result:
-                return {"novelty": float(result["novelty"])}
-            return {}
+                for dim in vision_dims:
+                    val = result["scores"].get(dim)
+                    if val is not None:
+                        partial[f"_vision_{dim}"] = float(val)
+            else:
+                # Flat keys fallback
+                for dim in vision_dims:
+                    val = result.get(dim)
+                    if val is not None:
+                        partial[f"_vision_{dim}"] = float(val)
+
+            # Capture rationale for forwarding to reward advisor
+            if result.get("rationale"):
+                partial["_vision_rationale"] = str(result["rationale"])
+
+            return partial
 
         # Run all 3 judges in parallel
+        raw: dict[str, Any] = {}
         with ThreadPoolExecutor(max_workers=3) as pool:
             futures = {
                 pool.submit(_call_state): "state",
@@ -331,14 +448,34 @@ class EvaluatorIngest:
                 judge_name = futures[fut]
                 try:
                     partial = fut.result()
-                    scores.update(partial)
+                    raw.update(partial)
                 except Exception as e:
                     logger.warning("%s judge trial %d failed: %s", judge_name, trial, e)
 
-        # Fill defaults for any missing scores
-        for k in SCORE_KEYS:
-            if k not in scores:
-                scores[k] = 0.5
+        # ---- Dimension blending: vision + text per DIMENSION_BLEND ----
+        for dim in SCORE_KEYS:
+            blend = DIMENSION_BLEND.get(dim, {"vision": 0.0, "text": 1.0})
+            vision_val = raw.get(f"_vision_{dim}")
+            text_val = raw.get(dim)  # state or puzzle judge
+
+            if vision_val is not None and text_val is not None:
+                # Both judges provided a score — blend them
+                scores[dim] = (
+                    blend["vision"] * vision_val + blend["text"] * text_val
+                )
+            elif vision_val is not None:
+                # Only vision available — use it fully
+                scores[dim] = vision_val
+            elif text_val is not None:
+                # Only text available — use it fully
+                scores[dim] = text_val
+            else:
+                # Neither judge scored this dimension
+                scores[dim] = 0.5
+
+        # Carry vision rationale through for the advisor
+        if raw.get("_vision_rationale"):
+            scores["_vision_rationale"] = raw["_vision_rationale"]
 
         return scores
 
@@ -452,12 +589,19 @@ class EvaluatorIngest:
         )
 
     def _build_vision_prompt(self, segment_data: dict[str, Any]) -> str:
-        """Build evaluation prompt for the vision judge model."""
+        """Build multi-dimension evaluation prompt for the vision judge.
+
+        The vision judge is the PRIMARY evaluator — it sees 7 frames spanning
+        the gameplay segment and scores progress, novelty, efficiency, and
+        dialog from direct pixel observation.  It also provides a natural-
+        language rationale that gets forwarded to the reward advisor.
+        """
         phase_guidance = PHASE_PROMPTS.get(self._phase, {}).get("vision", "")
 
         states = segment_data.get("states", [])
+        num_frames = len(segment_data.get("frames_b64", []))
         summary = f"Segment {segment_data.get('segment_id', '?')}: "
-        summary += f"{len(states)} frames. "
+        summary += f"{len(states)} game steps, {num_frames} frames shown. "
 
         if states:
             rooms = set()
@@ -468,16 +612,17 @@ class EvaluatorIngest:
 
             last = states[-1].get("state", {})
             if last.get("active_group", 0) in (4, 5):
-                summary += "This is a DUNGEON screenshot. "
+                summary += "Location: DUNGEON interior. "
             elif last.get("active_group", 0) == 2:
-                summary += "This is a MAKU TREE screenshot. "
+                summary += "Location: MAKU TREE grove. "
             else:
-                summary += "This is an OVERWORLD screenshot. "
+                summary += "Location: OVERWORLD. "
 
         context = ""
         if self._walkthrough:
             context = (
-                "You are evaluating a Zelda: Oracle of Seasons gameplay screenshot. "
+                "You are the PRIMARY evaluator for a Zelda: Oracle of Seasons "
+                "RL agent. You are analyzing a sequence of gameplay frames. "
                 "Use this game guide for context:\n\n"
                 f"{self._walkthrough}\n\n"
             )
@@ -486,18 +631,34 @@ class EvaluatorIngest:
         if phase_guidance:
             phase_section = (
                 f"CURRENT GAME PHASE: {self._phase}\n"
-                f"PHASE GUIDANCE: {phase_guidance}\n\n"
+                f"PHASE GUIDANCE:\n{phase_guidance}\n\n"
             )
 
         return (
             f"{context}"
             f"{phase_section}"
-            f"Analyze this Zelda: Oracle of Seasons screenshot for novelty and exploration. "
-            f"Rate how novel/interesting the game state is on a 0.0-1.0 scale. "
-            f"Consider: new areas explored (dungeons, caves, new overworld screens), "
-            f"unique enemy encounters, items found, NPCs present, "
-            f"environmental variety (different seasons change the landscape). {summary} "
-            f'Output JSON: {{"scores": {{"novelty": float}}, "rationale": str}}'
+            f"You are analyzing {num_frames} frames from a Zelda: Oracle of Seasons "
+            f"gameplay segment, shown in chronological order. "
+            f"The frames are labeled [Frame 1/{num_frames}] through "
+            f"[Frame {num_frames}/{num_frames}]. "
+            f"The game state JSON is also provided for context.\n\n"
+            f"{summary}\n\n"
+            f"Score this segment on FOUR dimensions (each 0.0 to 1.0):\n"
+            f"  progress  — Did the player advance? New rooms, items, enemies "
+            f"defeated, or meaningful position changes across frames?\n"
+            f"  novelty   — Are the frames showing new, visually distinct areas? "
+            f"Or revisiting the same places repeatedly?\n"
+            f"  efficiency — Is movement purposeful between frames? Heading in a "
+            f"clear direction vs wandering/backtracking/standing still?\n"
+            f"  dialog    — Are any dialog boxes visible on screen in any frame? "
+            f"Score 0.0 if no dialog, higher if dialog boxes appear.\n\n"
+            f"Also provide a 2-3 sentence 'rationale' describing what you observe "
+            f"across the frame sequence — where is Link, what is he doing, "
+            f"is he making progress?\n\n"
+            f"Output ONLY valid JSON:\n"
+            f'{{"scores": {{"progress": float, "novelty": float, '
+            f'"efficiency": float, "dialog": float}}, '
+            f'"rationale": "string describing observations across frames"}}'
         )
 
     @staticmethod
@@ -516,15 +677,23 @@ class EvaluatorIngest:
                 states = [json.loads(line) for line in states_raw.decode().strip().split("\n")]
                 manifest["states"] = states
 
-                frame_keys = [
+                frame_keys = sorted(
                     k for k in self._s3.list_keys(self._bucket, prefix=f"{key}/frames/")
                     if k.endswith(".png")
-                ]
+                )
                 if frame_keys:
-                    mid_frame = frame_keys[len(frame_keys) // 2]
-                    png_bytes = self._s3.download_bytes(self._bucket, mid_frame)
-                    manifest["frame_b64"] = base64.b64encode(png_bytes).decode("ascii")
-                    logger.info("Loaded frame %s for vision judge", mid_frame)
+                    selected = _select_segment_frames(frame_keys)
+                    frames_b64 = []
+                    for fk in selected:
+                        png_bytes = self._s3.download_bytes(self._bucket, fk)
+                        frames_b64.append(base64.b64encode(png_bytes).decode("ascii"))
+                    manifest["frames_b64"] = frames_b64
+                    # Keep single frame for backward compat
+                    manifest["frame_b64"] = frames_b64[len(frames_b64) // 2]
+                    logger.info(
+                        "Loaded %d frames for vision judge (%d available)",
+                        len(frames_b64), len(frame_keys),
+                    )
             else:
                 manifest = {"segment_id": key}
 

@@ -21,21 +21,20 @@ class CoverageReward:
     Each 16×16-pixel tile position is a unique coordinate, giving ~80
     coords per room (10 cols × 8 rows).
 
-    Count-based exploration: each coord tracks its visit count N.
-    Reward per visit = bonus / sqrt(N).  This means:
-      - 1st visit: full bonus (1/sqrt(1) = 1.0)
-      - 2nd visit: 71% bonus (1/sqrt(2) ≈ 0.707)
-      - 4th visit: 50% bonus (1/sqrt(4) = 0.5)
-      - 9th visit: 33% bonus (1/sqrt(9) ≈ 0.333)
-      - 100th visit: 10% bonus (1/sqrt(100) = 0.1)
+    Count-based exploration with hard cutoff: each coord tracks visits.
+    Reward per visit = bonus / sqrt(N), but ONLY for the first
+    `max_tile_visits` visits.  After that, the tile gives zero reward.
+    This prevents agents from farming tile rewards by oscillating
+    between the same rooms.
 
-    Unlike coord decay, this never recovers — revisiting the same tile
-    always yields less reward, preventing circular exploitation.
-    O(1) per step.
+    When the agent discovers a genuinely new room, tile visit counts
+    are halved (milestone reset).  This makes re-traversal of known
+    areas slightly rewarding again as a means to reach new frontiers.
     """
 
     bonus_per_tile: float = 0.1
     bonus_per_room: float = 10.0
+    max_tile_visits: int = 3
     # coord → visit count
     _visit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
     _visited_rooms: set[int] = field(default_factory=set)
@@ -44,22 +43,39 @@ class CoverageReward:
         """Return coverage reward for this step."""
         reward = 0.0
 
-        # New room bonus — flat per room
+        # New room bonus — flat per room, one-time only
         if room_id not in self._visited_rooms:
             self._visited_rooms.add(room_id)
             reward += self.bonus_per_room
+            # Milestone reset: halve all tile visit counts so re-traversal
+            # of known tiles is slightly rewarded to reach new frontiers
+            self._milestone_decay()
 
         # Fine-grained coordinate: (room_id, tile_x, tile_y)
         tile_x = pixel_x // 16
         tile_y = pixel_y // 16
         coord = (room_id, tile_x, tile_y)
 
-        # Count-based: reward = bonus / sqrt(visit_count)
+        # Count-based with hard cutoff after max_tile_visits
         count = self._visit_counts.get(coord, 0) + 1
         self._visit_counts[coord] = count
-        reward += self.bonus_per_tile / math.sqrt(count)
+        if count <= self.max_tile_visits:
+            reward += self.bonus_per_tile / math.sqrt(count)
 
         return reward
+
+    def _milestone_decay(self) -> None:
+        """Halve all tile visit counts when a new room is discovered.
+
+        This makes previously-exhausted tiles slightly rewarding again,
+        encouraging the agent to traverse known areas on the way to new
+        frontiers rather than standing still once local tiles are depleted.
+        """
+        if not self._visit_counts:
+            return
+        self._visit_counts = {
+            k: max(1, v // 2) for k, v in self._visit_counts.items()
+        }
 
     def reset(self) -> None:
         self._visit_counts.clear()

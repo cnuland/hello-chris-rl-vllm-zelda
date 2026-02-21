@@ -116,11 +116,15 @@ class LLMClient:
 
     def vision(
         self,
-        image_b64: str,
+        image_b64: str | list[str],
         game_state: dict[str, Any],
         prompt: str | None = None,
     ) -> dict[str, Any]:
-        """Call /vision route with frame screenshot + state.
+        """Call /vision route with frame screenshot(s) + state.
+
+        Accepts a single base64 image or a list for multi-frame analysis.
+        When multiple images are provided, [Frame N/M] markers are
+        interleaved so the model can reference specific frames.
 
         Returns parsed JSON matching SCHEMAS.md vision output.
         """
@@ -130,18 +134,26 @@ class LLMClient:
                 "interactables, hazards, Link position, room_id."
             )
 
+        images = [image_b64] if isinstance(image_b64, str) else image_b64
+
+        content: list[dict[str, Any]] = [
+            {"type": "text", "text": json.dumps(game_state)},
+        ]
+        for idx, img in enumerate(images):
+            if len(images) > 1:
+                content.append(
+                    {"type": "text", "text": f"[Frame {idx + 1}/{len(images)}]"}
+                )
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{img}"},
+                }
+            )
+
         messages = [
             {"role": "system", "content": prompt},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": json.dumps(game_state)},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
-                    },
-                ],
-            },
+            {"role": "user", "content": content},
         ]
         return self._call("vision", messages, max_tokens=512, temperature=0.1)
 

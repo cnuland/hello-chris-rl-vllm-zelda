@@ -453,6 +453,11 @@ class RewardAdvisor:
                 scores = seg.get("scores", {})
                 if scores:
                     parts.append(f"    Judge scores: {scores}")
+                # Vision rationale — qualitative description from the vision
+                # model's multi-frame analysis of this segment
+                vis_rationale = seg.get("vision_rationale", "")
+                if vis_rationale:
+                    parts.append(f"    Visual observation: {vis_rationale}")
             parts.append("")
 
         # Instructions — phase-specific and expanded output schema

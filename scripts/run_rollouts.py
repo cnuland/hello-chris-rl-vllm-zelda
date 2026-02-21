@@ -737,13 +737,17 @@ def run_reward_advisor(
             lines = scores_data.decode().strip().split("\n")
             for line in lines[:5]:
                 seg = json.loads(line)
-                segment_summaries.append({
+                summary: dict[str, Any] = {
                     "rooms": seg.get("scores", {}).get("progress", 0),
                     "dialog_count": seg.get("scores", {}).get("dialog", 0),
                     "area": "overworld",
                     "total_reward": seg.get("weighted_score", 0),
                     "scores": seg.get("scores", {}),
-                })
+                }
+                # Forward vision rationale so the advisor gets visual context
+                if seg.get("vision_rationale"):
+                    summary["vision_rationale"] = seg["vision_rationale"]
+                segment_summaries.append(summary)
         except Exception as e:
             logger.info("Could not load segment scores for advisor: %s", e)
 
