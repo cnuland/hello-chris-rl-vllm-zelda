@@ -119,18 +119,39 @@ function connectWebSocket() {
 
           // Update cursor immediately (bypasses trail queue).
           // HUD Y correction is applied server-side in the StreamWrapper.
+          // Clamp to room interior to avoid boundary transition artifacts:
+          // Link briefly occupies boundary tiles (0 and 7) during room
+          // transitions before the scroll flag is set — these often land
+          // on non-walkable tiles (ocean, cliffs, walls).
           if (lastOverworld) {
+            let fx = lastOverworld.fx ?? lastOverworld.x;
+            let fy = lastOverworld.fy ?? lastOverworld.y;
+
+            // Clamp Y into room interior [0.5, 6.5] (avoids top/bottom edge tiles)
+            const inRoomY = fy % 8;
+            if (inRoomY < 0.5) fy += (0.5 - inRoomY);
+            else if (inRoomY > 6.5) fy -= (inRoomY - 6.5);
+
+            // Clamp X into room interior [0.5, 9.5]
+            const inRoomX = fx % 10;
+            if (inRoomX < 0.5) fx += (0.5 - inRoomX);
+            else if (inRoomX > 9.5) fx -= (inRoomX - 9.5);
+
             latestCursorPos.set(envId, {
-              fx: lastOverworld.fx ?? lastOverworld.x,
-              fy: lastOverworld.fy ?? lastOverworld.y,
+              fx: fx,
+              fy: fy,
               color: color,
               direction: lastOverworld.direction ?? 2,
             });
           }
 
           // Queue overworld positions for trail heatmap (rate-limited)
+          // Skip boundary tiles (top/bottom of rooms) to avoid heatmap
+          // marks on non-walkable transition tiles.
           for (const element of data.pos_data) {
             if (element.z && element.z !== 0) continue; // skip interiors
+            const trailInRoomY = element.y % 8;
+            if (trailInRoomY === 0 || trailInRoomY >= 7) continue; // skip boundary rows
             trailStream.push(element);
           }
 

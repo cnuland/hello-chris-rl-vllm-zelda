@@ -160,8 +160,11 @@ class StreamWrapper(gym.Wrapper):
         direction = pyboy.memory[_PLAYER_DIR]
         scroll = pyboy.memory[_SCROLL_MODE]
 
-        # Skip during transitions (position is invalid)
-        if (scroll & 0x80) != 0:
+        # Skip during transitions — scroll mode is non-zero during any
+        # type of screen transition (scrolling, warping, fading).
+        # The high bit (0x80) catches active scrolling, but lower bits
+        # indicate pre/post-scroll states where position is unreliable.
+        if scroll != 0:
             return None
 
         # Only track overworld positions — interior/dungeon room_ids use
@@ -172,6 +175,12 @@ class StreamWrapper(gym.Wrapper):
         # Player Y is in screen coordinates (0-143) where the top 16px
         # are the HUD.  Subtract HUD height so tile 0 = top of play area.
         adj_y = max(0, pixel_y - 16)
+
+        # Skip extreme boundary positions — Link at the very top or bottom
+        # of the screen is entering/leaving the room before the scroll flag
+        # is set.  These positions land on non-walkable border tiles.
+        if pixel_y < 20 or pixel_y > 140:
+            return None
 
         # Convert to tile coordinates (integer — for heatmap trail)
         tile_x = pixel_x // 16
@@ -229,7 +238,7 @@ class StreamWrapper(gym.Wrapper):
                 "extra": f"rooms: {len(self._visited_rooms)}",
             },
             "pos_data": [
-                {"x": c["x"], "y": c["y"], "fx": round(c["fx"], 2), "fy": round(c["fy"], 2), "z": c["z"], "direction": c["direction"], "notable": c["notable"]}
+                {"x": c["x"], "y": c["y"], "fx": round(c["fx"], 2), "fy": round(c["fy"], 2), "z": c["z"], "room_id": c["room_id"], "tile_x": c["tile_x"], "tile_y": c["tile_y"], "direction": c["direction"], "notable": c["notable"]}
                 for c in self._coord_buffer
             ],
         })
