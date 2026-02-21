@@ -98,7 +98,12 @@ function connectWebSocket() {
       try {
         const data = JSON.parse(event.data);
         if (data.pos_data && Array.isArray(data.pos_data)) {
+          // Attach metadata (env_id, color) to each element so we can
+          // identify which agent produced it downstream.
+          const meta = data.metadata || {};
           for (const element of data.pos_data) {
+            element._envId = meta.env_id ?? "unknown";
+            element._color = meta.color || "";
             dataStream.push(element);
           }
           totalReceived += data.pos_data.length;
@@ -149,6 +154,7 @@ function processDataStream() {
   const batch = dataStream.splice(0, batchSize);
 
   for (const element of batch) {
+    // Add heatmap trail rectangle
     mapPanel.addPosSeenRect(
       element.x,
       element.y,
@@ -156,13 +162,27 @@ function processDataStream() {
       element.notable || ""
     );
 
-    if (element.notable && element.notable !== "") {
+    // Update per-agent cursor position (bright colored dot)
+    mapPanel.updateAgent(
+      element._envId,
+      element.x,
+      element.y,
+      element._color
+    );
+
+    // Only show meaningful events in the sidebar — skip new_room
+    // since it fires constantly with 24 parallel agents
+    if (
+      element.notable &&
+      element.notable !== "" &&
+      element.notable !== "new_room"
+    ) {
       sidePanel.addNotification(element.notable);
     }
   }
 
   updateStatus(
-    `Received: ${totalReceived} | Buffer: ${dataStream.length} | Tiles: ${mapPanel.posSeenMap.size}`
+    `Received: ${totalReceived} | Buffer: ${dataStream.length} | Agents: ${mapPanel.agentCursors.size} | Tiles: ${mapPanel.posSeenMap.size}`
   );
 }
 

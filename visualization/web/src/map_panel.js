@@ -1,9 +1,11 @@
 /**
  * Map panel for Oracle of Seasons RL agent visualization.
  *
- * Renders the overworld map background and overlays position heatmap
- * rectangles showing where the agent has been. Recent positions are green,
- * fading to red over time (30-second TTL).
+ * Renders the overworld map background with two overlay layers:
+ *   1. Agent cursors — bright colored circles showing each agent's
+ *      current position, updated in real-time.
+ *   2. Heatmap trail — fading translucent rectangles showing where
+ *      agents have recently visited (green → red over 15s TTL).
  *
  * Architecture inspired by:
  *   - LinkMapViz map_panel.js (https://github.com/Xe-Xo/LinkMapViz)
@@ -17,108 +19,117 @@
 import { Container, Graphics, Sprite, Assets } from "pixi.js";
 
 const TILE_SIZE = 16;
-const TTL_MS = 30000; // 30 seconds before positions fade out
+const TTL_MS = 15000; // 15 seconds before trail positions fade out
+const CURSOR_RADIUS = 5;
+
+// --- Color utilities ---
+
+function hslToHex(h, s, l) {
+  s /= 100;
+  l /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n) => {
+    const k = (n + h / 30) % 12;
+    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * color);
+  };
+  return (f(0) << 16) | (f(8) << 8) | f(4);
+}
+
+function parseColor(colorStr) {
+  if (!colorStr) return 0x44aa77;
+  const m = colorStr.match(/hsl\(\s*(\d+)\s*,\s*(\d+)%?\s*,\s*(\d+)%?\s*\)/);
+  if (m) return hslToHex(parseInt(m[1]), parseInt(m[2]), parseInt(m[3]));
+  if (colorStr.startsWith("#")) return parseInt(colorStr.slice(1), 16) || 0x44aa77;
+  return 0x44aa77;
+}
 
 /**
- * Represents a single visited position on the map.
+ * Represents a single visited position on the heatmap trail.
  */
 class PosSeen {
-  constructor(mapPanel, worldX, worldY, worldZ, notable) {
+  constructor(mapPanel, worldX, worldY, worldZ) {
     this.mapPanel = mapPanel;
     this.worldX = worldX;
     this.worldY = worldY;
     this.worldZ = worldZ;
-    this.notable = notable;
     this.createdAt = Date.now();
 
-    this.container = new Container();
-    this.container.x = this.worldX * TILE_SIZE;
-    this.container.y = this.worldY * TILE_SIZE;
-
-    // Draw colored rectangle
     this.graphics = new Graphics();
+    this.graphics.x = this.worldX * TILE_SIZE;
+    this.graphics.y = this.worldY * TILE_SIZE;
     this.graphics.rect(0, 0, TILE_SIZE, TILE_SIZE);
-    this.graphics.fill({ color: 0x00ff00, alpha: 0.5 });
-    this.container.addChild(this.graphics);
+    this.graphics.fill({ color: 0x00ff00, alpha: 0.25 });
 
-    // Notable event icon (if any)
-    if (this.notable && this.notable !== "") {
-      const iconAlias = this._notableToIcon(this.notable);
-      if (iconAlias) {
-        try {
-          this.sprite = Sprite.from(iconAlias);
-          this.sprite.setSize(TILE_SIZE, TILE_SIZE);
-          this.container.addChild(this.sprite);
-        } catch (e) {
-          // Icon not loaded, skip
-        }
-      }
-    }
-
-    mapPanel.posContainer.addChild(this.container);
+    mapPanel.trailContainer.addChild(this.graphics);
   }
 
-  _notableToIcon(notable) {
-    const iconMap = {
-      gate_slash: "icon_gate",
-      item_obtained: "icon_item",
-      new_room: "icon_room",
-    };
-    return iconMap[notable] || null;
-  }
-
-  /**
-   * Get interpolated color based on age (green → yellow → red).
-   */
   getColor(age) {
-    // age: 0 = fresh, 1 = expired
     const t = Math.min(Math.max(age, 0), 1);
-    let r, g, b;
+    let r, g;
     if (t < 0.5) {
-      // Green → Yellow
-      const f = t * 2;
-      r = Math.floor(255 * f);
+      r = Math.floor(255 * t * 2);
       g = 255;
-      b = 0;
     } else {
-      // Yellow → Red
-      const f = (t - 0.5) * 2;
       r = 255;
-      g = Math.floor(255 * (1 - f));
-      b = 0;
+      g = Math.floor(255 * (1 - (t - 0.5) * 2));
     }
-    return (r << 16) | (g << 8) | b;
+    return (r << 16) | (g << 8);
   }
 
-  /**
-   * Update visual appearance based on age. Returns false if expired.
-   */
   update() {
-    const elapsed = Date.now() - this.createdAt;
-    const age = elapsed / TTL_MS;
-
-    if (age >= 1.0) {
-      return false; // Expired
-    }
+    const age = (Date.now() - this.createdAt) / TTL_MS;
+    if (age >= 1.0) return false;
 
     const color = this.getColor(age);
-    const alpha = 0.5 * (1.0 - age * 0.8);
+    const alpha = 0.25 * (1.0 - age * 0.9);
 
     this.graphics.clear();
     this.graphics.rect(0, 0, TILE_SIZE, TILE_SIZE);
     this.graphics.fill({ color, alpha });
-
-    // Float notable icons upward as they age
-    if (this.sprite) {
-      this.sprite.y = -age * 10;
-      this.sprite.alpha = 1.0 - age;
-    }
-
-    return true; // Still alive
+    return true;
   }
 
   destroy() {
-    this.mapPanel.posContainer.removeChild(this.container);
+    this.mapPanel.trailContainer.removeChild(this.graphics);
+    this.graphics.destroy();
+  }
+}
+
+/**
+ * Agent cursor — a bright colored circle showing an agent's current position.
+ */
+class AgentCursor {
+  constructor(mapPanel, envId, color) {
+    this.mapPanel = mapPanel;
+    this.envId = envId;
+    this.color = color;
+
+    this.container = new Container();
+
+    // Outer glow ring
+    this.glow = new Graphics();
+    this.glow.circle(0, 0, CURSOR_RADIUS + 3);
+    this.glow.fill({ color: this.color, alpha: 0.3 });
+    this.container.addChild(this.glow);
+
+    // Main dot
+    this.dot = new Graphics();
+    this.dot.circle(0, 0, CURSOR_RADIUS);
+    this.dot.fill({ color: this.color, alpha: 1.0 });
+    this.dot.stroke({ color: 0xffffff, width: 1.5, alpha: 0.9 });
+    this.container.addChild(this.dot);
+
+    mapPanel.cursorContainer.addChild(this.container);
+  }
+
+  moveTo(worldX, worldY) {
+    this.container.x = worldX * TILE_SIZE + TILE_SIZE / 2;
+    this.container.y = worldY * TILE_SIZE + TILE_SIZE / 2;
+  }
+
+  destroy() {
+    this.mapPanel.cursorContainer.removeChild(this.container);
     this.container.destroy({ children: true });
   }
 }
@@ -131,15 +142,20 @@ export class MapPanel {
     this.app = app;
     this.container = new Container();
     this.bgContainer = new Container();
-    this.posContainer = new Container();
+    this.trailContainer = new Container();
+    this.cursorContainer = new Container();
 
     this.container.addChild(this.bgContainer);
-    this.container.addChild(this.posContainer);
+    this.container.addChild(this.trailContainer);
+    this.container.addChild(this.cursorContainer);
 
     app.stage.addChild(this.container);
 
-    // Position tracking: key → PosSeen
+    // Heatmap trail: key → PosSeen
     this.posSeenMap = new Map();
+
+    // Agent cursors: envId → AgentCursor
+    this.agentCursors = new Map();
 
     // Interaction state
     this._dragging = false;
@@ -149,11 +165,7 @@ export class MapPanel {
     this._setupInteraction();
   }
 
-  /**
-   * Add a background map image.
-   */
   addBackground(alias) {
-    // Hide previous backgrounds
     for (const child of this.bgContainer.children) {
       child.visible = false;
     }
@@ -162,58 +174,67 @@ export class MapPanel {
   }
 
   /**
-   * Add a visited position rectangle.
+   * Update an agent's cursor position (or create it if new).
    */
-  addPosSeenRect(x, y, z, notable) {
-    const key = `${x}_${y}_${z}`;
+  updateAgent(envId, worldX, worldY, colorStr) {
+    let cursor = this.agentCursors.get(envId);
+    if (!cursor) {
+      const color = parseColor(colorStr);
+      cursor = new AgentCursor(this, envId, color);
+      this.agentCursors.set(envId, cursor);
+    }
+    cursor.moveTo(worldX, worldY);
+  }
 
-    // If position already tracked, refresh it
+  /**
+   * Add a heatmap trail rectangle.
+   */
+  addTrailRect(x, y, z) {
+    const key = `${x}_${y}_${z}`;
     if (this.posSeenMap.has(key)) {
       const existing = this.posSeenMap.get(key);
       existing.destroy();
       this.posSeenMap.delete(key);
     }
-
-    const posSeen = new PosSeen(this, x, y, z, notable);
+    const posSeen = new PosSeen(this, x, y, z);
     this.posSeenMap.set(key, posSeen);
   }
 
   /**
-   * Update all position rectangles (fade/destroy expired ones).
+   * Update all trail rectangles (fade/destroy expired ones).
    */
-  updatePosSeenRect() {
+  updateTrails() {
     for (const [key, posSeen] of this.posSeenMap) {
-      const alive = posSeen.update();
-      if (!alive) {
+      if (!posSeen.update()) {
         posSeen.destroy();
         this.posSeenMap.delete(key);
       }
     }
   }
 
-  /**
-   * Set up pan and zoom interactions.
-   */
+  // Keep old name as alias for backward compat with index.js
+  addPosSeenRect(x, y, z, notable) {
+    this.addTrailRect(x, y, z);
+  }
+  updatePosSeenRect() {
+    this.updateTrails();
+  }
+
   _setupInteraction() {
     const canvas = this.app.canvas;
 
-    // Mouse wheel zoom
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
       const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-
-      // Zoom toward cursor position
       const rect = canvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
-
       const worldX = (mouseX - this.container.x) / this.container.scale.x;
       const worldY = (mouseY - this.container.y) / this.container.scale.y;
 
       this.container.scale.x *= zoomFactor;
       this.container.scale.y *= zoomFactor;
 
-      // Clamp scale
       const minScale = 0.1;
       const maxScale = 10;
       this.container.scale.x = Math.max(minScale, Math.min(maxScale, this.container.scale.x));
@@ -223,7 +244,6 @@ export class MapPanel {
       this.container.y = mouseY - worldY * this.container.scale.y;
     });
 
-    // Mouse drag pan
     canvas.addEventListener("mousedown", (e) => {
       this._dragging = true;
       this._dragStart = { x: e.clientX, y: e.clientY };
@@ -232,16 +252,13 @@ export class MapPanel {
 
     canvas.addEventListener("mousemove", (e) => {
       if (!this._dragging) return;
-      const dx = e.clientX - this._dragStart.x;
-      const dy = e.clientY - this._dragStart.y;
-      this.container.x = this._panStart.x + dx;
-      this.container.y = this._panStart.y + dy;
+      this.container.x = this._panStart.x + (e.clientX - this._dragStart.x);
+      this.container.y = this._panStart.y + (e.clientY - this._dragStart.y);
     });
 
     canvas.addEventListener("mouseup", () => { this._dragging = false; });
     canvas.addEventListener("mouseleave", () => { this._dragging = false; });
 
-    // Touch support
     let lastTouchDist = 0;
     canvas.addEventListener("touchstart", (e) => {
       if (e.touches.length === 1) {
@@ -258,18 +275,15 @@ export class MapPanel {
     canvas.addEventListener("touchmove", (e) => {
       e.preventDefault();
       if (e.touches.length === 1 && this._dragging) {
-        const dx = e.touches[0].clientX - this._dragStart.x;
-        const dy = e.touches[0].clientY - this._dragStart.y;
-        this.container.x = this._panStart.x + dx;
-        this.container.y = this._panStart.y + dy;
+        this.container.x = this._panStart.x + (e.touches[0].clientX - this._dragStart.x);
+        this.container.y = this._panStart.y + (e.touches[0].clientY - this._dragStart.y);
       } else if (e.touches.length === 2) {
         const dx = e.touches[0].clientX - e.touches[1].clientX;
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (lastTouchDist > 0) {
-          const scale = dist / lastTouchDist;
-          this.container.scale.x *= scale;
-          this.container.scale.y *= scale;
+          this.container.scale.x *= dist / lastTouchDist;
+          this.container.scale.y *= dist / lastTouchDist;
         }
         lastTouchDist = dist;
       }
