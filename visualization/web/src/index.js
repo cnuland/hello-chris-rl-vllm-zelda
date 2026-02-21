@@ -25,7 +25,6 @@
 import "./style.css";
 import { Application, Assets } from "pixi.js";
 import { MapPanel } from "./map_panel.js";
-import { SidePanel } from "./side_panel.js";
 
 // --- Configuration ---
 // Auto-detect wss:// when served over HTTPS (e.g. behind OpenShift Route)
@@ -35,15 +34,20 @@ const WS_URL =
   `${_wsProto}//${window.location.host}/receive`;
 const PROCESS_INTERVAL_MS = 20; // 50Hz processing rate
 const RECONNECT_INTERVAL_MS = 2000;
+const MAX_TRAIL_BUFFER = 20000; // Cap trail buffer to prevent memory growth
 
 // --- State ---
 let app;
 let mapPanel;
-let sidePanel;
 let ws = null;
-let dataStream = [];
+let trailStream = []; // Queued trail positions (rate-limited processing)
 let totalReceived = 0;
 let statusEl;
+
+// Latest cursor position per env_id — updated IMMEDIATELY on WebSocket
+// message arrival, bypassing the rate-limited trail queue entirely.
+// This ensures cursors always reflect the agent's current room/position.
+let latestCursorPos = new Map();
 
 async function init() {
   // Create PixiJS application
@@ -68,8 +72,6 @@ async function init() {
   // Create UI panels
   mapPanel = new MapPanel(app);
   mapPanel.addBackground("bg_overworld");
-
-  sidePanel = new SidePanel(app, window.innerWidth, window.innerHeight);
 
   // Center the map initially
   mapPanel.container.x = window.innerWidth / 2 - 2560 / 2;
@@ -99,15 +101,49 @@ function connectWebSocket() {
       try {
         const data = JSON.parse(event.data);
         if (data.pos_data && Array.isArray(data.pos_data)) {
-          // Attach metadata (env_id, color) to each element so we can
-          // identify which agent produced it downstream.
           const meta = data.metadata || {};
-          for (const element of data.pos_data) {
-            element._envId = meta.env_id ?? "unknown";
-            element._color = meta.color || "";
-            element._direction = element.direction ?? 2; // default: facing down
-            dataStream.push(element);
+          const envId = meta.env_id ?? "unknown";
+          const color = meta.color || "";
+
+          // Find the last overworld position in this batch for the cursor.
+          // This is the agent's CURRENT position — skip interiors (z != 0)
+          // since interior room_ids don't map to the overworld grid.
+          let lastOverworld = null;
+          for (let i = data.pos_data.length - 1; i >= 0; i--) {
+            const p = data.pos_data[i];
+            if (!p.z || p.z === 0) {
+              lastOverworld = p;
+              break;
+            }
           }
+
+          // Update cursor immediately (bypasses trail queue).
+          // Apply HUD Y correction: the game's Y coordinate is screen-
+          // relative (top 16px = HUD), but the map starts below the HUD.
+          // Subtract 1 tile (16px) from the Y, clamped within the room.
+          if (lastOverworld) {
+            const rawFy = lastOverworld.fy ?? lastOverworld.y;
+            const roomRow = Math.floor(rawFy / 8);
+            const inRoomY = Math.max(0, Math.min(rawFy - roomRow * 8 - 1.0, 7.0));
+
+            latestCursorPos.set(envId, {
+              fx: lastOverworld.fx ?? lastOverworld.x,
+              fy: roomRow * 8 + inRoomY,
+              color: color,
+              direction: lastOverworld.direction ?? 2,
+            });
+          }
+
+          // Queue overworld positions for trail heatmap (rate-limited).
+          // Apply the same HUD Y correction to trail positions.
+          for (const element of data.pos_data) {
+            if (element.z && element.z !== 0) continue; // skip interiors
+            // Correct integer Y
+            const rowI = Math.floor(element.y / 8);
+            element.y = rowI * 8 + Math.max(0, Math.min(element.y - rowI * 8 - 1, 7));
+            trailStream.push(element);
+          }
+
           totalReceived += data.pos_data.length;
         }
       } catch (e) {
@@ -137,57 +173,44 @@ function reconnectWebSocket() {
 
 /**
  * Process incoming data stream at 50Hz.
- * Rate-limits to avoid overwhelming the renderer.
- * Inspired by LinkMapViz's refreshNotifications() approach.
+ *
+ * Cursor updates are applied immediately from latestCursorPos (no rate
+ * limit), so agents always show their current position.  Trail heatmap
+ * rectangles are rate-limited to avoid overwhelming the renderer.
  */
 function processDataStream() {
-  // Update existing position rectangles (fade/destroy)
-  mapPanel.updatePosSeenRect();
+  // Advance trail fade/destroy + cursor lerp
+  mapPanel.updateTrails();
 
-  // Scroll notifications
-  sidePanel.moveNotifications();
+  // --- Cursor updates (immediate, every tick) ---
+  for (const [envId, pos] of latestCursorPos) {
+    mapPanel.updateAgent(envId, pos.fx, pos.fy, pos.color, pos.direction);
+  }
 
-  // Process a chunk of incoming data
-  const len = dataStream.length;
-  if (len === 0) return;
+  // --- Trail heatmap (rate-limited) ---
+  const len = trailStream.length;
+  if (len === 0) {
+    updateStatus(
+      `Received: ${totalReceived} | Agents: ${mapPanel.agentCursors.size} | Tiles: ${mapPanel.posSeenMap.size}`
+    );
+    return;
+  }
 
-  // Rate limit: process at most len/6000 or 1 element per tick
-  const batchSize = Math.max(1, Math.min(len, Math.ceil(len / 6000)));
-  const batch = dataStream.splice(0, batchSize);
+  // Process up to 100 trail points per tick (5000/sec at 50Hz)
+  const batchSize = Math.min(len, 100);
+  const batch = trailStream.splice(0, batchSize);
 
   for (const element of batch) {
-    // Add heatmap trail rectangle
-    mapPanel.addPosSeenRect(
-      element.x,
-      element.y,
-      element.z || 0,
-      element.notable || ""
-    );
+    mapPanel.addTrailRect(element.x, element.y, element.z || 0);
+  }
 
-    // Update per-agent cursor position (Link sprite)
-    // Use sub-tile float coords (fx/fy) for precise placement,
-    // falling back to integer tile coords if not available
-    mapPanel.updateAgent(
-      element._envId,
-      element.fx ?? element.x,
-      element.fy ?? element.y,
-      element._color,
-      element._direction
-    );
-
-    // Only show meaningful events in the sidebar — skip new_room
-    // since it fires constantly with 24 parallel agents
-    if (
-      element.notable &&
-      element.notable !== "" &&
-      element.notable !== "new_room"
-    ) {
-      sidePanel.addNotification(element.notable);
-    }
+  // Cap buffer to prevent unbounded memory growth
+  if (trailStream.length > MAX_TRAIL_BUFFER) {
+    trailStream.splice(0, trailStream.length - MAX_TRAIL_BUFFER);
   }
 
   updateStatus(
-    `Received: ${totalReceived} | Buffer: ${dataStream.length} | Agents: ${mapPanel.agentCursors.size} | Tiles: ${mapPanel.posSeenMap.size}`
+    `Received: ${totalReceived} | Buffer: ${trailStream.length} | Agents: ${mapPanel.agentCursors.size} | Tiles: ${mapPanel.posSeenMap.size}`
   );
 }
 

@@ -163,9 +163,18 @@ class StreamWrapper(gym.Wrapper):
         if (scroll & 0x80) != 0:
             return None
 
+        # Only track overworld positions — interior/dungeon room_ids use
+        # a separate room numbering that doesn't map to the overworld grid.
+        if group != 0:
+            return None
+
+        # Player Y is in screen coordinates (0-143) where the top 16px
+        # are the HUD.  Subtract HUD height so tile 0 = top of play area.
+        adj_y = max(0, pixel_y - 16)
+
         # Convert to tile coordinates (integer — for heatmap trail)
         tile_x = pixel_x // 16
-        tile_y = pixel_y // 16
+        tile_y = adj_y // 16
 
         # Convert to world coordinates (matching overworld.png layout)
         room_col = room_id % 16
@@ -175,7 +184,7 @@ class StreamWrapper(gym.Wrapper):
 
         # Sub-tile precision (float — for smooth cursor positioning)
         world_fx = room_col * 10.0 + min(pixel_x / 16.0, 9.9375)
-        world_fy = room_row * 8.0 + min(pixel_y / 16.0, 7.9375)
+        world_fy = room_row * 8.0 + min(adj_y / 16.0, 7.9375)
 
         # Detect notable events
         notable = ""

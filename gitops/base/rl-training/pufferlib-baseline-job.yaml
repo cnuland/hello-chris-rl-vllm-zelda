@@ -158,3 +158,6 @@ spec:
             secretKeyRef:
               name: minio-credentials
               key: secret-key
+        # Visualization
+        - name: VIS_WS_URL
+          value: ws://zelda-map-viz.zelda-rl.svc.cluster.local:3344/broadcast
