@@ -567,6 +567,15 @@ class ZeldaEnv(gym.Env):
             # Isolates exploration learning from survival (curriculum).
             if self._god_mode:
                 self._pyboy.memory[_HEALTH] = self._pyboy.memory[_MAX_HEALTH]
+            # Suppress START/SELECT — the agent doesn't need inventory
+            # management yet.  The START menu wastes thousands of steps as
+            # the agent gets stuck for the visual feedback.  Mask out START
+            # (bit 3) and SELECT (bit 2) from input registers AND force-close
+            # any menu that managed to open.
+            self._pyboy.memory[_KEYS_PRESSED] &= ~0x0C
+            self._pyboy.memory[_KEYS_JUST_PRESSED] &= ~0x0C
+            if self._pyboy.memory[_MENU_STATE] != 0:
+                self._pyboy.memory[_MENU_STATE] = 0
 
         self._last_movement = move_act
         self._last_button = btn_act
