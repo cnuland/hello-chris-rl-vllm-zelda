@@ -160,11 +160,11 @@ class StreamWrapper(gym.Wrapper):
         direction = pyboy.memory[_PLAYER_DIR]
         scroll = pyboy.memory[_SCROLL_MODE]
 
-        # Skip during transitions — scroll mode is non-zero during any
-        # type of screen transition (scrolling, warping, fading).
-        # The high bit (0x80) catches active scrolling, but lower bits
-        # indicate pre/post-scroll states where position is unreliable.
-        if scroll != 0:
+        # Skip during active scrolling — scroll_mode bit 1+ indicates
+        # room transitions where position data is unreliable.  Bit 0
+        # (scroll=0x01) is the normal resting state in most rooms and
+        # MUST be allowed, otherwise no data is captured at all.
+        if scroll > 1:
             return None
 
         # Only track overworld positions — interior/dungeon room_ids use
@@ -172,19 +172,16 @@ class StreamWrapper(gym.Wrapper):
         if group != 0:
             return None
 
-        # Player Y is in screen coordinates (0-143) where the top 16px
-        # are the HUD.  Subtract HUD height so tile 0 = top of play area.
-        adj_y = max(0, pixel_y - 16)
-
-        # Skip extreme boundary positions — Link at the very top or bottom
-        # of the screen is entering/leaving the room before the scroll flag
-        # is set.  These positions land on non-walkable border tiles.
-        if pixel_y < 20 or pixel_y > 140:
+        # PLAYER_Y (w1Link.yh) is room-relative (0-127), NOT screen-
+        # relative.  No HUD correction needed — the zelda_env uses the
+        # same raw value.  Values >= 128 occur briefly during room
+        # transitions before the scroll flag is set.
+        if pixel_y >= 128:
             return None
 
         # Convert to tile coordinates (integer — for heatmap trail)
         tile_x = pixel_x // 16
-        tile_y = adj_y // 16
+        tile_y = pixel_y // 16
 
         # Convert to world coordinates (matching overworld.png layout)
         room_col = room_id % 16
@@ -194,7 +191,7 @@ class StreamWrapper(gym.Wrapper):
 
         # Sub-tile precision (float — for smooth cursor positioning)
         world_fx = room_col * 10.0 + min(pixel_x / 16.0, 9.9375)
-        world_fy = room_row * 8.0 + min(adj_y / 16.0, 7.9375)
+        world_fy = room_row * 8.0 + min(pixel_y / 16.0, 7.9375)
 
         # Detect notable events
         notable = ""

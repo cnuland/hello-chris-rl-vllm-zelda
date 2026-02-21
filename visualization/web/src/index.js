@@ -118,26 +118,24 @@ function connectWebSocket() {
           }
 
           // Update cursor immediately (bypasses trail queue).
-          // The StreamWrapper's -16px HUD correction over-corrects by ~1
-          // tile — PLAYER_Y is room-relative in OoS, not screen-relative.
-          // Shift Y down by +1 tile here to compensate, then clamp to
-          // avoid cliff/wall boundary tiles.
+          // Coordinates are now correct from the server (PLAYER_Y is
+          // room-relative, no HUD correction needed).  Light clamping
+          // keeps sprites within the walkable room interior.
           if (lastOverworld) {
             let fx = lastOverworld.fx ?? lastOverworld.x;
             let fy = lastOverworld.fy ?? lastOverworld.y;
 
-            // Shift Y down 1 tile (compensate server-side HUD over-correction)
+            // Clamp Y to walkable room interior [1.0, 6.5].
+            // Tile 0 = top border, tiles 6-7 = often cliff/wall/water.
             const roomBaseY = Math.floor(fy / 8) * 8;
-            let adjInRoomY = Math.min((fy - roomBaseY) + 1.0, 7.0);
-
-            // Clamp to room interior — bottom rows 6-7 are often cliff/wall
-            if (adjInRoomY > 5.5) adjInRoomY = 5.5;
+            let adjInRoomY = fy - roomBaseY;
+            if (adjInRoomY < 1.0) adjInRoomY = 1.0;
+            else if (adjInRoomY > 6.5) adjInRoomY = 6.5;
 
             fy = roomBaseY + adjInRoomY;
 
             // Clamp X to walkable room interior [1.0, 8.5].
-            // No shift needed — tiles 0 and 9 are border trees/walls in
-            // most rooms, so just keep sprites within the interior.
+            // Tiles 0 and 9 are border trees/walls in most rooms.
             const roomBaseX = Math.floor(fx / 10) * 10;
             let adjInRoomX = fx - roomBaseX;
             if (adjInRoomX < 1.0) adjInRoomX = 1.0;
