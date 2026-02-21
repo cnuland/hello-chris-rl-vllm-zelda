@@ -78,6 +78,10 @@ WRAM_TILESET_PALETTES = 0xDE80  # wTilesetPalettes — 8 BG palettes × 8 bytes
 OVERWORLD_ROOM_FLAGS = 0xC700 # wOverworldRoomFlags (256 bytes)
 SUBROSIA_ROOM_FLAGS = 0xC800  # wSubrosiaRoomFlags
 
+# OAM (Object Attribute Memory) for sprite manipulation
+OAM_START = 0xFE00            # Start of OAM (40 entries × 4 bytes)
+OAM_COUNT = 40                # Number of OAM sprite entries
+
 # Screen dimensions
 GB_SCREEN_W = 160
 GB_SCREEN_H = 144
@@ -410,18 +414,17 @@ def warp_to_room(pyboy, save_state_bytes: bytes, room_id: int,
             for extra in range(60):
                 pyboy.tick()
                 if pyboy.memory[ACTIVE_GROUP] != group:
-                    # Secondary warp detected — render what we have so far.
-                    # The tileset was loaded for the target room before the
-                    # script changed the group, so VRAM may be usable.
+                    # Secondary warp detected — an auto-warp script changed
+                    # the map group (e.g. room 217's Maku Tree auto-cave).
+                    # VRAM now contains interior/cave tiles, NOT the overworld
+                    # tiles we want.  Return None so the caller can try the
+                    # walk-from-neighbor fallback instead.
                     logger.info(
-                        f"  Room {room_id}: secondary warp at frame +{extra}, "
-                        f"rendering early VRAM snapshot"
+                        f"  Room {room_id}: secondary warp at frame +{extra} "
+                        f"(group changed to {pyboy.memory[ACTIVE_GROUP]}), "
+                        f"deferring to walk fallback"
                     )
-                    # Restore group/room so _render_room_from_vram reads
-                    # the correct palettes
-                    pyboy.memory[ACTIVE_GROUP] = group
-                    pyboy.memory[ACTIVE_ROOM] = room_id
-                    return _render_room_from_vram(pyboy)
+                    return None
             break
 
     if not room_changed:
@@ -440,6 +443,156 @@ def warp_to_room(pyboy, save_state_bytes: bytes, room_id: int,
 
     # 7. Render from VRAM (bypasses disabled LCD entirely)
     return _render_room_from_vram(pyboy)
+
+
+def walk_to_room(pyboy, save_state_bytes: bytes, room_id: int,
+                 group: int = 0, season: int | None = None,
+                 max_walk_frames: int = 500,
+                 settle_frames: int = 120) -> np.ndarray | None:
+    """Walk from an adjacent room into the target room via screen transition.
+
+    Some rooms (like room 217 / Maku Tree area) have auto-warp scripts that
+    trigger when entered via direct warp, corrupting VRAM with interior tiles.
+    Walking in naturally via a screen scroll avoids these scripts, preserving
+    the correct overworld tiles in VRAM.
+
+    Strategy:
+      1. Warp to an adjacent room using the normal fadeout approach.
+      2. Wait for the game to fully load and fade back in (~120 frames).
+      3. Hold a direction button to walk Link toward the target room edge.
+      4. Wait for the screen transition to complete.
+      5. Render VRAM with the correct overworld tiles.
+
+    Tries each neighbor direction (left, top, right, bottom) until one works.
+
+    Args:
+        pyboy: PyBoy emulator instance.
+        save_state_bytes: Save state to reload for clean starting point.
+        room_id: Target room index (0-255).
+        group: Map group (0 = overworld).
+        season: Season to force (0-3), or None for default.
+        max_walk_frames: Maximum frames to hold the walk button.
+        settle_frames: Frames to wait after warp/transition for game to settle.
+
+    Returns:
+        128x160x3 numpy array (RGB) of the room, or None if all attempts fail.
+    """
+    row = room_id // GRID_COLS
+    col = room_id % GRID_COLS
+
+    # Build list of (neighbor_room, walk_direction, spawn_pos) candidates.
+    # Spawn positions place Link near the edge facing the target room:
+    #   warp_pos encoding: high nibble = Y tile (0-7), low nibble = X tile (0-9)
+    neighbors = []
+    if col > 0:
+        # Left neighbor → walk right into target
+        neighbors.append((room_id - 1, "right", 0x49))
+    if row > 0:
+        # Top neighbor → walk down into target
+        neighbors.append((room_id - GRID_COLS, "down", 0x75))
+    if col < GRID_COLS - 1:
+        # Right neighbor → walk left into target
+        neighbors.append((room_id + 1, "left", 0x40))
+    if row < GRID_ROWS - 1:
+        # Bottom neighbor → walk up into target
+        neighbors.append((room_id + GRID_COLS, "up", 0x05))
+
+    for neighbor_id, direction, spawn_pos in neighbors:
+        logger.info(
+            f"  Room {room_id}: walk attempt — warp to room {neighbor_id}, "
+            f"then walk {direction}"
+        )
+
+        # --- Step 1: Warp to the neighbor room ---
+        pyboy.load_state(io.BytesIO(save_state_bytes))
+        for _ in range(10):
+            pyboy.tick()
+
+        pyboy.memory[MENU_STATE] = 0
+        pyboy.memory[KEYS_PRESSED] = 0x00
+        pyboy.memory[KEYS_JUST_PRESSED] = 0x00
+
+        if season is not None:
+            pyboy.memory[ROOM_STATE_MODIFIER] = season & 0x03
+
+        pyboy.memory[WARP_DEST_GROUP] = 0x80 | group
+        pyboy.memory[WARP_DEST_ROOM] = neighbor_id
+        pyboy.memory[WARP_TRANSITION] = 0x00
+        pyboy.memory[WARP_DEST_POS] = spawn_pos
+        pyboy.memory[WARP_TRANSITION2] = 0x03  # Fadeout (full tile loading)
+
+        neighbor_loaded = False
+        for frame in range(500):
+            pyboy.tick()
+            if pyboy.memory[ACTIVE_ROOM] == neighbor_id:
+                # Clear warp state to prevent re-trigger
+                pyboy.memory[WARP_DEST_GROUP] = 0xFF
+                pyboy.memory[WARP_DEST_ROOM] = 0x00
+                pyboy.memory[WARP_TRANSITION] = 0x00
+                pyboy.memory[WARP_TRANSITION2] = 0x00
+                pyboy.memory[KEYS_PRESSED] = 0x00
+                pyboy.memory[KEYS_JUST_PRESSED] = 0x00
+
+                # Wait for fade-in to complete so the game is playable
+                for _ in range(settle_frames):
+                    pyboy.tick()
+
+                # Verify neighbor didn't also warp us away
+                if (pyboy.memory[ACTIVE_ROOM] == neighbor_id and
+                        pyboy.memory[ACTIVE_GROUP] == group):
+                    neighbor_loaded = True
+                break
+
+        if not neighbor_loaded:
+            logger.warning(
+                f"  Could not reach neighbor room {neighbor_id}"
+            )
+            continue
+
+        # --- Step 2: Walk toward the target room ---
+        pyboy.button_press(direction)
+
+        entered_target = False
+        for step in range(max_walk_frames):
+            pyboy.tick()
+            if (pyboy.memory[ACTIVE_ROOM] == room_id and
+                    pyboy.memory[ACTIVE_GROUP] == group):
+                entered_target = True
+                logger.info(
+                    f"  Entered room {room_id} at walk step {step}"
+                )
+                pyboy.button_release(direction)
+
+                # Wait for screen scroll transition to finish and
+                # VRAM tile data to fully populate
+                for _ in range(settle_frames):
+                    pyboy.tick()
+                break
+
+        if not entered_target:
+            pyboy.button_release(direction)
+            logger.warning(
+                f"  Walk {direction} from room {neighbor_id} "
+                f"did not reach room {room_id}"
+            )
+            continue
+
+        # --- Step 3: Verify final state ---
+        final_room = pyboy.memory[ACTIVE_ROOM]
+        final_group = pyboy.memory[ACTIVE_GROUP]
+        if final_room != room_id or final_group != group:
+            logger.warning(
+                f"  Room {room_id}: post-walk state mismatch "
+                f"(group={final_group}, room={final_room})"
+            )
+            continue
+
+        # --- Step 4: Render from VRAM ---
+        logger.info(f"  Room {room_id}: walk successful, rendering VRAM")
+        return _render_room_from_vram(pyboy)
+
+    logger.warning(f"Room {room_id}: all walk-from-neighbor attempts failed")
+    return None
 
 
 def generate_overworld(rom_path: Path, state_path: Path,
@@ -516,6 +669,15 @@ def generate_overworld(rom_path: Path, state_path: Path,
                 )
                 if room_frame is not None:
                     break
+
+        # Walk-from-neighbor fallback for rooms with auto-warp scripts
+        # (e.g. room 217 / Maku Tree which warps to a cave on direct entry)
+        if room_frame is None:
+            logger.info(f"  Trying walk-from-neighbor for room {room_id}")
+            room_frame = walk_to_room(
+                pyboy, save_state_bytes, room_id,
+                group=group, season=season,
+            )
 
         if room_frame is not None:
             room_img = Image.fromarray(room_frame)
