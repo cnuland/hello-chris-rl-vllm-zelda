@@ -118,29 +118,19 @@ function connectWebSocket() {
           }
 
           // Update cursor immediately (bypasses trail queue).
-          // Apply HUD Y correction: the game's Y coordinate is screen-
-          // relative (top 16px = HUD), but the map starts below the HUD.
-          // Subtract 1 tile (16px) from the Y, clamped within the room.
+          // HUD Y correction is applied server-side in the StreamWrapper.
           if (lastOverworld) {
-            const rawFy = lastOverworld.fy ?? lastOverworld.y;
-            const roomRow = Math.floor(rawFy / 8);
-            const inRoomY = Math.max(0, Math.min(rawFy - roomRow * 8 - 1.0, 7.0));
-
             latestCursorPos.set(envId, {
               fx: lastOverworld.fx ?? lastOverworld.x,
-              fy: roomRow * 8 + inRoomY,
+              fy: lastOverworld.fy ?? lastOverworld.y,
               color: color,
               direction: lastOverworld.direction ?? 2,
             });
           }
 
-          // Queue overworld positions for trail heatmap (rate-limited).
-          // Apply the same HUD Y correction to trail positions.
+          // Queue overworld positions for trail heatmap (rate-limited)
           for (const element of data.pos_data) {
             if (element.z && element.z !== 0) continue; // skip interiors
-            // Correct integer Y
-            const rowI = Math.floor(element.y / 8);
-            element.y = rowI * 8 + Math.max(0, Math.min(element.y - rowI * 8 - 1, 7));
             trailStream.push(element);
           }
 
