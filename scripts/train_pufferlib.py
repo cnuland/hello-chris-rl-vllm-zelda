@@ -456,8 +456,8 @@ def run_training_epoch(
     # main entropy coeff, applied ONLY to the button dimension.
     button_entropy_coeff = float(os.getenv("BUTTON_ENTROPY_COEF", "0.02"))
 
-    # Button action tracking for diagnostics
-    button_action_counts = np.zeros(3, dtype=np.int64)  # NOP, A, B
+    # Button action tracking for diagnostics (no NOP — always A or B)
+    button_action_counts = np.zeros(2, dtype=np.int64)  # A, B
 
     global_step = 0
     start_time = time.time()
@@ -705,14 +705,13 @@ def run_training_epoch(
                 milestones["max_rooms"],
                 milestones["max_tiles"],
             )
-            # Button action distribution — diagnose if A/B are being used
+            # Button action distribution — A (sword) vs B (item)
             total_btns = button_action_counts.sum()
             if total_btns > 0:
                 logger.info(
-                    "  Buttons: NOP=%.1f%% A=%.1f%% B=%.1f%%",
+                    "  Buttons: A=%.1f%% B=%.1f%%",
                     100 * button_action_counts[0] / total_btns,
                     100 * button_action_counts[1] / total_btns,
-                    100 * button_action_counts[2] / total_btns,
                 )
 
     # ---- Epoch summary ----

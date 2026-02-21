@@ -773,7 +773,7 @@ class RewardWrapper(gym.Wrapper):
         # Reward pressing A (sword) in new rooms to encourage button usage.
         # Without this, the button policy head collapses to NOP since movement
         # dominates reward.  Per-(group, room) cap prevents spamming.
-        if self._current_button == 1:  # A button pressed
+        if self._current_button == 0:  # A button pressed (ButtonAction.A=0)
             room_key = (active_group, room_id)
             if room_key not in self._a_press_rooms:
                 self._a_press_rooms.add(room_key)

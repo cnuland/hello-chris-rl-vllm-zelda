@@ -42,11 +42,15 @@ class MovementAction(IntEnum):
 
 
 class ButtonAction(IntEnum):
-    """Button dimension of MultiDiscrete action."""
+    """Button dimension of MultiDiscrete action.
 
-    NOP = 0
-    A = 1
-    B = 2
+    NOP removed — the agent should always be pressing A (sword) or B (item).
+    Without NOP, button entropy collapse is impossible and the agent will
+    naturally discover sword interactions at the Maku Tree gate.
+    """
+
+    A = 0
+    B = 1
 
 
 # Map MultiDiscrete enums to ZeldaAction for press/release event lookup
@@ -58,7 +62,6 @@ _MOVEMENT_TO_ZELDA = {
     MovementAction.RIGHT: ZeldaAction.RIGHT,
 }
 _BUTTON_TO_ZELDA = {
-    ButtonAction.NOP: ZeldaAction.NOP,
     ButtonAction.A: ZeldaAction.A,
     ButtonAction.B: ZeldaAction.B,
 }
@@ -136,8 +139,8 @@ class ZeldaEnv(gym.Env):
 
         # Spaces — MultiDiscrete allows simultaneous movement + button press.
         # Dimension 0: movement (5) — NOP, UP, DOWN, LEFT, RIGHT
-        # Dimension 1: button (3) — NOP, A, B
-        self.action_space = spaces.MultiDiscrete([5, 3])
+        # Dimension 1: button (2) — A, B (no NOP — always press a button)
+        self.action_space = spaces.MultiDiscrete([5, 2])
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(128,), dtype=np.float32
         )
