@@ -118,21 +118,22 @@ function connectWebSocket() {
           }
 
           // Update cursor immediately (bypasses trail queue).
-          // HUD Y correction is applied server-side in the StreamWrapper.
-          // Clamp to room interior to avoid boundary transition artifacts:
-          // Link briefly occupies boundary tiles (0 and 7) during room
-          // transitions before the scroll flag is set — these often land
-          // on non-walkable tiles (ocean, cliffs, walls).
+          // The StreamWrapper's -16px HUD correction over-corrects by ~1
+          // tile — PLAYER_Y is room-relative in OoS, not screen-relative.
+          // Shift Y down by +1 tile here to compensate, then clamp to
+          // avoid cliff/wall boundary tiles.
           if (lastOverworld) {
             let fx = lastOverworld.fx ?? lastOverworld.x;
             let fy = lastOverworld.fy ?? lastOverworld.y;
 
-            // Clamp Y into room interior [1.0, 5.5] — coastal rooms have
-            // cliff/wall tiles at rows 6-7 and transition artifacts at row 0.
-            // Keeping sprites in [1, 5.5] clears cliffs and room borders.
-            const inRoomY = fy % 8;
-            if (inRoomY < 1.0) fy += (1.0 - inRoomY);
-            else if (inRoomY > 5.5) fy -= (inRoomY - 5.5);
+            // Shift Y down 1 tile (compensate server-side HUD over-correction)
+            const roomBaseY = Math.floor(fy / 8) * 8;
+            let adjInRoomY = Math.min((fy - roomBaseY) + 1.0, 7.0);
+
+            // Clamp to room interior — bottom rows 6-7 are often cliff/wall
+            if (adjInRoomY > 6.0) adjInRoomY = 6.0;
+
+            fy = roomBaseY + adjInRoomY;
 
             // Clamp X into room interior [0.5, 9.5]
             const inRoomX = fx % 10;
