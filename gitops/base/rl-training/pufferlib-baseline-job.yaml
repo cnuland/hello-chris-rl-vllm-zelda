@@ -1,6 +1,6 @@
-# Baseline test: PufferLib PPO with single save, milestone tracking.
-# GPU-accelerated, 48 envs, 500k steps/epoch, 6 epochs, god mode throughout.
-# Purpose: validate PufferLib learns on Zelda before adding complexity.
+# Overnight run: PufferLib PPO with advancing checkpoints, 12-hour target.
+# GPU-accelerated, 96 envs, 2M steps/epoch, 24 epochs, god mode throughout.
+# Purpose: long-duration training with save state progression across epochs.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -46,7 +46,7 @@ spec:
         - name: EPOCH
           value: "0"
         - name: MAX_EPOCHS
-          value: "12"
+          value: "24"
         - name: EPOCH_STEPS
           value: "2000000"
         - name: NUM_ENVS
@@ -72,7 +72,7 @@ spec:
         - name: LR_END
           value: "1e-4"
         - name: GOD_MODE_EPOCHS
-          value: "12"
+          value: "24"
         - name: STAGNATION_LIMIT
           value: "3000"
         - name: NUM_STEPS
