@@ -6,7 +6,7 @@
 #   podman build -t quay.io/cnuland/zelda-map-viz:latest -f visualization/Containerfile visualization/
 
 # ── Stage 1: Build PixiJS web frontend ──────────────────────────
-FROM node:20-alpine AS web-builder
+FROM registry.access.redhat.com/ubi9/nodejs-20:latest AS web-builder
 WORKDIR /build
 COPY web/package.json web/package-lock.json* ./
 RUN npm install
@@ -16,11 +16,8 @@ COPY assets/overworld.png assets/overworld.png
 RUN npm run build
 
 # ── Stage 2: Production server ──────────────────────────────────
-FROM node:20-alpine
+FROM registry.access.redhat.com/ubi9/nodejs-20-minimal:latest
 WORKDIR /app
-
-# OpenShift runs containers with arbitrary UIDs in GID 0
-RUN chown -R 1001:0 /app && chmod -R g=u /app
 
 COPY ws-server/package.json .
 RUN npm install --production && npm cache clean --force
@@ -28,10 +25,6 @@ RUN npm install --production && npm cache clean --force
 COPY ws-server/index.js .
 COPY --from=web-builder /build/dist ./public
 
-# Fix permissions for the copied files
-RUN chown -R 1001:0 /app && chmod -R g=u /app
-
-USER 1001
 EXPOSE 3344
 
 CMD ["node", "index.js"]
