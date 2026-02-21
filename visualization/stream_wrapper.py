@@ -27,6 +27,7 @@ License: MIT
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -80,7 +81,7 @@ class StreamWrapper(gym.Wrapper):
         env: gym.Env,
         ws_address: str = "ws://localhost:3344/broadcast",
         stream_metadata: dict[str, Any] | None = None,
-        upload_interval: int = 500,
+        upload_interval: int = int(os.environ.get("VIS_UPLOAD_INTERVAL", "5")),
         csv_log_path: str | None = None,
     ):
         """Initialize the stream wrapper.
