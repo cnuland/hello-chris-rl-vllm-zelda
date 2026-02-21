@@ -127,10 +127,12 @@ function connectWebSocket() {
             let fx = lastOverworld.fx ?? lastOverworld.x;
             let fy = lastOverworld.fy ?? lastOverworld.y;
 
-            // Clamp Y into room interior [0.5, 6.5] (avoids top/bottom edge tiles)
+            // Clamp Y into room interior [1.0, 5.5] — coastal rooms have
+            // cliff/wall tiles at rows 6-7 and transition artifacts at row 0.
+            // Keeping sprites in [1, 5.5] clears cliffs and room borders.
             const inRoomY = fy % 8;
-            if (inRoomY < 0.5) fy += (0.5 - inRoomY);
-            else if (inRoomY > 6.5) fy -= (inRoomY - 6.5);
+            if (inRoomY < 1.0) fy += (1.0 - inRoomY);
+            else if (inRoomY > 5.5) fy -= (inRoomY - 5.5);
 
             // Clamp X into room interior [0.5, 9.5]
             const inRoomX = fx % 10;
