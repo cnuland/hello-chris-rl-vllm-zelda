@@ -71,7 +71,7 @@ class RewardWrapper(gym.Wrapper):
         self._death_penalty = cfg.get("death", -1.0)
         self._health_loss_scale = cfg.get("health_loss", -0.005)
         self._time_penalty = cfg.get("time_penalty", 0.0)
-        self._wall_collision_penalty = cfg.get("wall_collision", -0.01)
+        self._wall_collision_penalty = cfg.get("wall_collision", 0.0)
         self._sword_bonus = cfg.get("sword", 15.0)
         self._dungeon_bonus = cfg.get("dungeon", 15.0)
         self._maku_tree_bonus = cfg.get("maku_tree", 15.0)
@@ -130,13 +130,6 @@ class RewardWrapper(gym.Wrapper):
         # known territory without being truncated.
         self._milestone_achieved_this_step = False
 
-        # Menu management — allow brief menu use for item switching,
-        # but penalize camping and suppress exploration rewards while open
-        self._menu_steps = 0
-        self._menu_grace = 30     # Steps allowed in menu without penalty
-        self._menu_max = 60       # Auto-dismiss menu after this many steps
-        self._menu_penalty = -0.05 # Per-step penalty after grace period
-
         # Exit-seeking shaping — continuous reward for moving toward FRONTIER exits
         self._exit_seeking_scale = cfg.get("exit_seeking", 0.5)
 
@@ -168,10 +161,9 @@ class RewardWrapper(gym.Wrapper):
         self._triggered_directives: set[str] = set()
 
         # Sword interaction bonus — per-room reward for pressing A near
-        # obstacles or in key areas.  Prevents button entropy collapse by
-        # giving the agent a gradient signal that "A button does something."
-        # Capped to once per (group, room) to prevent spamming.
-        self._sword_use_bonus = cfg.get("sword_use", 0.5)
+        # obstacles or in key areas.  Originally prevented button NOP collapse;
+        # no longer needed since NOP was removed from the action space.
+        self._sword_use_bonus = cfg.get("sword_use", 0.0)
         self._a_press_rooms: set[tuple[int, int]] = set()
         self._current_button = 0  # 0=NOP, 1=A, 2=B
 
@@ -410,7 +402,6 @@ class RewardWrapper(gym.Wrapper):
         self._coverage.reset()
         self._steps_since_discovery = 0
         self._prev_total_tiles = 0
-        self._menu_steps = 0
         self._recent_rooms.clear()
         self._prev_room_id = info.get("room_id", -1)
         self._dialog_rooms.clear()
@@ -827,24 +818,11 @@ class RewardWrapper(gym.Wrapper):
                 if tgt_group is not None and active_group == tgt_group:
                     reward += directive.get("bonus", 0)  # negative for penalties
 
-        # --- Menu management ---
-        # Allow brief menu access for item switching, but suppress exploration
-        # rewards while menu is open and penalize camping
-        menu_active = info.get("menu_active", False)
-        if menu_active:
-            self._menu_steps += 1
-            # Penalty after grace period
-            if self._menu_steps > self._menu_grace:
-                reward += self._menu_penalty
-            # Auto-dismiss after max steps
-            if self._menu_steps >= self._menu_max and hasattr(self.env, "_dismiss_menu"):
-                self.env._dismiss_menu()
-        else:
-            self._menu_steps = 0
-
-        # --- Exploration rewards (only when NOT in menu and NOT transitioning) ---
+        # --- Exploration rewards (only when NOT transitioning) ---
+        # Menu suppression is handled at the emulator level (START/SELECT
+        # masked every tick), so no menu gating needed here.
         is_transitioning = info.get("transitioning", False)
-        if not menu_active and not is_transitioning:
+        if not is_transitioning:
             # Backtrack penalty: penalize re-entering recently visited rooms
             room_id = info.get("room_id", 0)
             if room_id != self._prev_room_id:

@@ -360,7 +360,7 @@ def run_training_epoch(
         god_mode=god_mode,
         epoch=epoch,
         reward_config=reward_config,
-        enable_rnd=True,
+        enable_rnd=False,  # disabled: 30% cap makes RND weakest when needed most
         enable_shaping=bool(rm_path),
         reward_model_path=rm_path,
         enable_export=True,

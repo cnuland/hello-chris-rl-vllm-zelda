@@ -79,16 +79,17 @@ spec:
           value: "256"
         - name: TIME_PENALTY
           value: "-0.001"
-        # Exploration bonuses — must dominate coverage grind to drive room discovery
+        # Exploration bonuses — balanced to prevent cliff/barrier traps.
+        # Distance (any direction) + directional (toward target) + room bonus
+        # (per unique room) form a trio: room bonus motivates detours around
+        # obstacles, directional provides gentle northward bias, distance
+        # encourages spreading out.
         - name: DISTANCE_BONUS
-          value: "15"
+          value: "5"
         - name: DIRECTIONAL_BONUS
-          value: "20"
+          value: "12"
         - name: GRID_EXPLORATION
           value: "0.05"
-        # New room discovery bonus — flat reward per unique room visited.
-        # Must be competitive with directional bonus (20) to motivate detours
-        # around obstacles like cliffs.  Default code value is 10.0.
         - name: NEW_ROOM_BONUS
           value: "15"
         # PPO core — increase updates per batch for stronger policy learning
