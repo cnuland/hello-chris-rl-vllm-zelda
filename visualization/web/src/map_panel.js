@@ -22,6 +22,7 @@ const TILE_SIZE = 16;
 const TTL_MS = 15000; // 15 seconds before trail positions fade out
 const CURSOR_RADIUS = 10;
 const SPRITE_SCALE = 1.5; // Scale up Link sprite for visibility
+const CURSOR_STALE_MS = 10000; // Remove agent cursors after 10s without updates
 
 // --- Color utilities ---
 
@@ -135,6 +136,7 @@ class AgentCursor {
     this.envId = envId;
     this.color = color;
     this.currentDir = 2; // default: facing down
+    this.lastSeen = Date.now();
 
     this.container = new Container();
 
@@ -168,6 +170,7 @@ class AgentCursor {
   moveTo(worldX, worldY) {
     this.container.x = worldX * TILE_SIZE + TILE_SIZE / 2;
     this.container.y = worldY * TILE_SIZE + TILE_SIZE / 2;
+    this.lastSeen = Date.now();
   }
 
   setDirection(dir) {
@@ -264,6 +267,27 @@ export class MapPanel {
       if (!posSeen.update()) {
         posSeen.destroy();
         this.posSeenMap.delete(key);
+      }
+    }
+    this._cleanStaleCursors();
+  }
+
+  /**
+   * Remove agent cursors that haven't received data recently.
+   * This handles agents that stagnated, reset, or disconnected.
+   */
+  _cleanStaleCursors() {
+    const now = Date.now();
+    for (const [envId, cursor] of this.agentCursors) {
+      const age = now - cursor.lastSeen;
+      if (age > CURSOR_STALE_MS) {
+        cursor.destroy();
+        this.agentCursors.delete(envId);
+      } else if (age > CURSOR_STALE_MS * 0.6) {
+        // Fade out the cursor as it approaches the stale threshold
+        cursor.container.alpha = 1.0 - (age - CURSOR_STALE_MS * 0.6) / (CURSOR_STALE_MS * 0.4);
+      } else {
+        cursor.container.alpha = 1.0;
       }
     }
   }
