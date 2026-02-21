@@ -129,7 +129,12 @@ function getDirectionTextures() {
 /**
  * Agent cursor — a Link sprite showing an agent's current position and
  * facing direction, with a colored glow ring for agent identification.
+ *
+ * Uses lerp interpolation for smooth movement between position updates.
  */
+const LERP_SPEED = 0.15; // 0-1: how quickly cursor catches up (lower = smoother)
+const WARP_THRESHOLD = 5; // tiles: if target is further than this, snap instantly
+
 class AgentCursor {
   constructor(mapPanel, envId, color) {
     this.mapPanel = mapPanel;
@@ -137,6 +142,13 @@ class AgentCursor {
     this.color = color;
     this.currentDir = 2; // default: facing down
     this.lastSeen = Date.now();
+
+    // Lerp state (in pixel coordinates on the map)
+    this.targetX = 0;
+    this.targetY = 0;
+    this.currentX = 0;
+    this.currentY = 0;
+    this._initialized = false;
 
     this.container = new Container();
 
@@ -167,10 +179,49 @@ class AgentCursor {
     mapPanel.cursorContainer.addChild(this.container);
   }
 
+  /**
+   * Set the target position (sub-tile precision via float world coords).
+   * The cursor will lerp toward this position each tick.
+   */
   moveTo(worldX, worldY) {
-    this.container.x = worldX * TILE_SIZE + TILE_SIZE / 2;
-    this.container.y = worldY * TILE_SIZE + TILE_SIZE / 2;
+    this.targetX = worldX * TILE_SIZE;
+    this.targetY = worldY * TILE_SIZE;
     this.lastSeen = Date.now();
+
+    // First position update: snap immediately (no lerp from origin)
+    if (!this._initialized) {
+      this.currentX = this.targetX;
+      this.currentY = this.targetY;
+      this.container.x = this.currentX;
+      this.container.y = this.currentY;
+      this._initialized = true;
+    }
+  }
+
+  /**
+   * Advance the lerp interpolation one step. Called each process tick.
+   */
+  lerpTick() {
+    const dx = this.targetX - this.currentX;
+    const dy = this.targetY - this.currentY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist < 0.5) {
+      // Close enough — snap to target
+      this.currentX = this.targetX;
+      this.currentY = this.targetY;
+    } else if (dist > WARP_THRESHOLD * TILE_SIZE) {
+      // Too far (room change / warp) — snap instantly
+      this.currentX = this.targetX;
+      this.currentY = this.targetY;
+    } else {
+      // Smooth lerp
+      this.currentX += dx * LERP_SPEED;
+      this.currentY += dy * LERP_SPEED;
+    }
+
+    this.container.x = this.currentX;
+    this.container.y = this.currentY;
   }
 
   setDirection(dir) {
@@ -260,7 +311,8 @@ export class MapPanel {
   }
 
   /**
-   * Update all trail rectangles (fade/destroy expired ones).
+   * Update all trail rectangles (fade/destroy expired ones)
+   * and advance cursor lerp interpolation.
    */
   updateTrails() {
     for (const [key, posSeen] of this.posSeenMap) {
@@ -268,6 +320,10 @@ export class MapPanel {
         posSeen.destroy();
         this.posSeenMap.delete(key);
       }
+    }
+    // Advance lerp for all agent cursors
+    for (const cursor of this.agentCursors.values()) {
+      cursor.lerpTick();
     }
     this._cleanStaleCursors();
   }

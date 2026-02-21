@@ -165,10 +165,12 @@ function processDataStream() {
     );
 
     // Update per-agent cursor position (Link sprite)
+    // Use sub-tile float coords (fx/fy) for precise placement,
+    // falling back to integer tile coords if not available
     mapPanel.updateAgent(
       element._envId,
-      element.x,
-      element.y,
+      element.fx ?? element.x,
+      element.fy ?? element.y,
       element._color,
       element._direction
     );

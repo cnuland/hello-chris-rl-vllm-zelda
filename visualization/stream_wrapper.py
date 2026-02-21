@@ -163,7 +163,7 @@ class StreamWrapper(gym.Wrapper):
         if (scroll & 0x80) != 0:
             return None
 
-        # Convert to tile coordinates
+        # Convert to tile coordinates (integer — for heatmap trail)
         tile_x = pixel_x // 16
         tile_y = pixel_y // 16
 
@@ -172,6 +172,10 @@ class StreamWrapper(gym.Wrapper):
         room_row = room_id // 16
         world_x = room_col * 10 + min(tile_x, 9)
         world_y = room_row * 8 + min(tile_y, 7)
+
+        # Sub-tile precision (float — for smooth cursor positioning)
+        world_fx = room_col * 10.0 + min(pixel_x / 16.0, 9.9375)
+        world_fy = room_row * 8.0 + min(pixel_y / 16.0, 7.9375)
 
         # Detect notable events
         notable = ""
@@ -192,6 +196,8 @@ class StreamWrapper(gym.Wrapper):
         return {
             "x": world_x,
             "y": world_y,
+            "fx": world_fx,
+            "fy": world_fy,
             "z": group,
             "room_id": room_id,
             "tile_x": tile_x,
@@ -213,7 +219,7 @@ class StreamWrapper(gym.Wrapper):
                 "extra": f"rooms: {len(self._visited_rooms)}",
             },
             "pos_data": [
-                {"x": c["x"], "y": c["y"], "z": c["z"], "direction": c["direction"], "notable": c["notable"]}
+                {"x": c["x"], "y": c["y"], "fx": round(c["fx"], 2), "fy": round(c["fy"], 2), "z": c["z"], "direction": c["direction"], "notable": c["notable"]}
                 for c in self._coord_buffer
             ],
         })
