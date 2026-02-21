@@ -337,7 +337,8 @@ def _render_room_from_vram(pyboy) -> np.ndarray:
 
 def warp_to_room(pyboy, save_state_bytes: bytes, room_id: int,
                  group: int = 0, season: int | None = None,
-                 max_wait_frames: int = 500) -> np.ndarray | None:
+                 max_wait_frames: int = 500,
+                 warp_pos: int = 0x55) -> np.ndarray | None:
     """Warp to a specific overworld room and render it from VRAM.
 
     Uses the game's fadeout warp transition (WARP_TRANSITION2=0x03) which
@@ -384,7 +385,7 @@ def warp_to_room(pyboy, save_state_bytes: bytes, room_id: int,
     pyboy.memory[WARP_DEST_GROUP] = 0x80 | group
     pyboy.memory[WARP_DEST_ROOM] = room_id
     pyboy.memory[WARP_TRANSITION] = 0x00   # TRANSITION_DEST_BASIC
-    pyboy.memory[WARP_DEST_POS] = 0x55     # Row 5, Col 5 (center)
+    pyboy.memory[WARP_DEST_POS] = warp_pos  # default: Row 5, Col 5 (center)
     pyboy.memory[WARP_TRANSITION2] = 0x03  # Fadeout (loads tiles fully)
 
     # 5. Wait for room change (~33 frames) + tilemap population (~10 more)
@@ -403,9 +404,24 @@ def warp_to_room(pyboy, save_state_bytes: bytes, room_id: int,
             pyboy.memory[WARP_TRANSITION2] = 0x00
             pyboy.memory[KEYS_PRESSED] = 0x00
             pyboy.memory[KEYS_JUST_PRESSED] = 0x00
-            # Extra frames for generateVramTilesWithRoomChanges to finish
-            for _ in range(60):
+            # Extra frames for generateVramTilesWithRoomChanges to finish.
+            # Monitor for secondary warps (some rooms have auto-cave scripts
+            # that change the group during tile loading).
+            for extra in range(60):
                 pyboy.tick()
+                if pyboy.memory[ACTIVE_GROUP] != group:
+                    # Secondary warp detected — render what we have so far.
+                    # The tileset was loaded for the target room before the
+                    # script changed the group, so VRAM may be usable.
+                    logger.info(
+                        f"  Room {room_id}: secondary warp at frame +{extra}, "
+                        f"rendering early VRAM snapshot"
+                    )
+                    # Restore group/room so _render_room_from_vram reads
+                    # the correct palettes
+                    pyboy.memory[ACTIVE_GROUP] = group
+                    pyboy.memory[ACTIVE_ROOM] = room_id
+                    return _render_room_from_vram(pyboy)
             break
 
     if not room_changed:
@@ -487,6 +503,19 @@ def generate_overworld(rom_path: Path, state_path: Path,
             pyboy, save_state_bytes, room_id,
             group=group, season=season,
         )
+
+        # Retry with different spawn positions if the default fails
+        # (some rooms have warp tiles at the center that redirect to caves)
+        if room_frame is None:
+            for retry_pos in [0x00, 0x09, 0x70, 0x77]:
+                logger.info(f"  Retrying room {room_id} with pos=0x{retry_pos:02X}")
+                room_frame = warp_to_room(
+                    pyboy, save_state_bytes, room_id,
+                    group=group, season=season,
+                    warp_pos=retry_pos,
+                )
+                if room_frame is not None:
+                    break
 
         if room_frame is not None:
             room_img = Image.fromarray(room_frame)
