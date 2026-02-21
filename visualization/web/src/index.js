@@ -131,18 +131,17 @@ function connectWebSocket() {
             let adjInRoomY = Math.min((fy - roomBaseY) + 1.0, 7.0);
 
             // Clamp to room interior — bottom rows 6-7 are often cliff/wall
-            if (adjInRoomY > 6.0) adjInRoomY = 6.0;
+            if (adjInRoomY > 5.5) adjInRoomY = 5.5;
 
             fy = roomBaseY + adjInRoomY;
 
-            // Shift X left by 1 tile — entity X coordinates in OoS have
-            // the same type of offset as Y (position represents the right
-            // side of the collision box rather than the center).
+            // Clamp X to walkable room interior [1.0, 8.5].
+            // No shift needed — tiles 0 and 9 are border trees/walls in
+            // most rooms, so just keep sprites within the interior.
             const roomBaseX = Math.floor(fx / 10) * 10;
-            let adjInRoomX = Math.max((fx - roomBaseX) - 1.0, 0.0);
-
-            // Clamp to room interior — left/right border tiles are walls
-            if (adjInRoomX > 8.5) adjInRoomX = 8.5;
+            let adjInRoomX = fx - roomBaseX;
+            if (adjInRoomX < 1.0) adjInRoomX = 1.0;
+            else if (adjInRoomX > 8.5) adjInRoomX = 8.5;
 
             fx = roomBaseX + adjInRoomX;
 
