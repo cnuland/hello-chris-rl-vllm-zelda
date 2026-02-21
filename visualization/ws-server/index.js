@@ -30,11 +30,10 @@ const PORT = process.env.PORT || 3344;
 
 // Serve the built PixiJS web app from ./public
 app.use(express.static(path.join(__dirname, "public")));
-const REPLAY_BUFFER_SIZE = 16;
 
-// Replay buffer: stores last N messages so late-joining viewers
-// immediately see recent agent activity.
-let replayBuffer = [];
+// Latest state per agent: stores the most recent message from each env_id
+// so that newly connected browsers immediately see ALL agents' positions.
+let latestByAgent = new Map();
 
 // Track connected receivers
 let receivers = new Set();
@@ -47,10 +46,10 @@ app.ws("/broadcast", (ws, req) => {
     try {
       const data = JSON.parse(msg);
 
-      // Add to replay buffer (circular)
-      replayBuffer.push(msg);
-      if (replayBuffer.length > REPLAY_BUFFER_SIZE) {
-        replayBuffer.shift();
+      // Store latest message per env_id for instant replay on connect
+      const envId = data.metadata?.env_id;
+      if (envId !== undefined) {
+        latestByAgent.set(envId, msg);
       }
 
       // Forward to all connected receivers
@@ -75,8 +74,9 @@ app.ws("/receive", (ws, req) => {
   receivers.add(ws);
   console.log(`[receive] Client connected (${receivers.size} total)`);
 
-  // Send replay buffer to new client
-  for (const msg of replayBuffer) {
+  // Replay latest state for every known agent — the browser gets all
+  // cursor positions immediately instead of waiting for each env to flush.
+  for (const msg of latestByAgent.values()) {
     ws.send(msg);
   }
 
@@ -91,7 +91,7 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     receivers: receivers.size,
-    replayBufferSize: replayBuffer.length,
+    agents: latestByAgent.size,
   });
 });
 
