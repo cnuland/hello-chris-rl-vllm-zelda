@@ -135,10 +135,16 @@ function connectWebSocket() {
 
             fy = roomBaseY + adjInRoomY;
 
-            // Clamp X into room interior [0.5, 9.5]
-            const inRoomX = fx % 10;
-            if (inRoomX < 0.5) fx += (0.5 - inRoomX);
-            else if (inRoomX > 9.5) fx -= (inRoomX - 9.5);
+            // Shift X left by 1 tile — entity X coordinates in OoS have
+            // the same type of offset as Y (position represents the right
+            // side of the collision box rather than the center).
+            const roomBaseX = Math.floor(fx / 10) * 10;
+            let adjInRoomX = Math.max((fx - roomBaseX) - 1.0, 0.0);
+
+            // Clamp to room interior — left/right border tiles are walls
+            if (adjInRoomX > 8.5) adjInRoomX = 8.5;
+
+            fx = roomBaseX + adjInRoomX;
 
             latestCursorPos.set(envId, {
               fx: fx,
