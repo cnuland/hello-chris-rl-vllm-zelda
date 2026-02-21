@@ -14,7 +14,7 @@
   "tile_size_px": 16,
   "success_count": 256,
   "fail_count": 0,
-  "elapsed_seconds": 6.2,
+  "elapsed_seconds": 6.0,
   "rooms": {
     "0": {
       "status": "ok",

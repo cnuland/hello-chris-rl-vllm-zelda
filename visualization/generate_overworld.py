@@ -480,6 +480,34 @@ def walk_to_room(pyboy, save_state_bytes: bytes, room_id: int,
     Returns:
         128x160x3 numpy array (RGB) of the room, or None if all attempts fail.
     """
+    # --- Quick check: does the save state already start in the target room? ---
+    # If so, we can capture the screen directly without any walking.
+    # (The save state puts the game in a fully playable state with LCD on.)
+    pyboy.load_state(io.BytesIO(save_state_bytes))
+    for _ in range(10):
+        pyboy.tick()
+
+    if (pyboy.memory[ACTIVE_ROOM] == room_id and
+            pyboy.memory[ACTIVE_GROUP] == group):
+        logger.info(f"  Room {room_id}: save state starts here, capturing directly")
+
+        # Clear any menus or dialogue
+        pyboy.memory[MENU_STATE] = 0
+        pyboy.memory[KEYS_PRESSED] = 0x00
+        pyboy.memory[KEYS_JUST_PRESSED] = 0x00
+        for _ in range(30):
+            pyboy.tick()
+
+        # Hide all sprites (Link, NPCs) via OAM zeroing
+        for i in range(OAM_COUNT):
+            pyboy.memory[OAM_START + i * 4] = 0
+        pyboy.tick()  # Render one frame without sprites
+
+        screen_img = pyboy.screen.image.convert("RGB")
+        return np.array(
+            screen_img.crop((0, HUD_HEIGHT, ROOM_W, HUD_HEIGHT + ROOM_H))
+        )
+
     row = room_id // GRID_COLS
     col = room_id % GRID_COLS
 
