@@ -224,10 +224,16 @@ class ZeldaEnv(gym.Env):
         # Use "null" renderer for headless training (47x faster than SDL2).
         # Testing confirmed both renderers produce identical game state and
         # pixel output during area transitions (including Maku Tree group 2).
-        # The (248,248) position in group 2 is a WRAM bank issue, not a
-        # renderer issue — both renderers show the same white screen.
         window = "null" if self._headless else "SDL2"
-        self._pyboy = PyBoy(self.rom_path, window=window, sound_emulated=False)
+        # sound_emulated MUST be True: Oracle of Seasons uses the GBC sound
+        # controller's DIV-APU frame sequencer for room-transition timing.
+        # With sound_emulated=False the sound registers freeze, causing the
+        # Maku Tree area transition to deadlock (LCDC stuck at 0x00).
+        # sound_volume=0 mutes audio output without disabling emulation.
+        self._pyboy = PyBoy(
+            self.rom_path, window=window,
+            sound_emulated=True, sound_volume=0,
+        )
         # Tick frames to get past the boot logo
         for _ in range(1000):
             self._pyboy.tick()
