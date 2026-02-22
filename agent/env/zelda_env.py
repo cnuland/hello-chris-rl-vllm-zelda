@@ -218,7 +218,18 @@ class ZeldaEnv(gym.Env):
         logging.getLogger("pyboy.core.sound").setLevel(logging.CRITICAL + 1)
         logging.getLogger("pyboy").setLevel(logging.WARNING)
 
-        window = "null" if self._headless else "SDL2"
+        # Always use SDL2 — PyBoy's "null" renderer breaks area transitions
+        # (e.g. Maku Tree entrance) because the game's state machine relies
+        # on the rendering pipeline to complete screen transitions.  With
+        # "null", the transition stalls: room ID updates in RAM but the
+        # player position never initializes (stuck at 248,248 forever).
+        # SDL2 + dummy video driver gives us a real renderer without a
+        # visible window, fixing transitions while staying headless.
+        if self._headless:
+            import os
+            os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+            os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+        window = "SDL2"
         self._pyboy = PyBoy(self.rom_path, window=window, sound_emulated=False)
         # Tick frames to get past the boot logo
         for _ in range(1000):

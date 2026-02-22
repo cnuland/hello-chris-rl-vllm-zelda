@@ -19,7 +19,6 @@ Environment variables:
   LR_START       -- Starting learning rate (default 3e-4)
   LR_END         -- Final learning rate (default 1e-5)
   GOD_MODE_EPOCHS -- Infinite health curriculum epochs (default 6)
-  STAGNATION_LIMIT -- Steps without new tile before episode truncation (default 5000)
   RUN_EVAL       -- Run LLM eval after training (default true)
   RUN_ADVISOR    -- Run LLM reward advisor (default true)
   CLEAN_START    -- Delete old MinIO data (default true)
@@ -85,11 +84,9 @@ def make_env(
     god_mode: bool = False,
     epoch: int = 0,
     reward_config: dict | None = None,
-    enable_rnd: bool = True,
     enable_shaping: bool = False,
     reward_model_path: str = "",
     enable_export: bool = True,
-    stagnation_limit: int = 5000,
     vis_ws_url: str = "",
     buf=None,
     seed=None,
@@ -120,12 +117,10 @@ def make_env(
     wrapped = RewardWrapper(
         base,
         reward_config=reward_config,
-        enable_rnd=enable_rnd,
         enable_shaping=enable_shaping,
         reward_model_path=reward_model_path if reward_model_path else None,
         enable_export=enable_export,
         epoch=epoch,
-        stagnation_limit=stagnation_limit,
     )
 
     env = wrapped
@@ -360,11 +355,9 @@ def run_training_epoch(
         god_mode=god_mode,
         epoch=epoch,
         reward_config=reward_config,
-        enable_rnd=False,  # disabled: 30% cap makes RND weakest when needed most
         enable_shaping=bool(rm_path),
         reward_model_path=rm_path,
         enable_export=True,
-        stagnation_limit=int(os.getenv("STAGNATION_LIMIT", "5000")),
         vis_ws_url=os.getenv("VIS_WS_URL", ""),
     )
 
@@ -800,7 +793,7 @@ def run_training_epoch(
         episodes_completed=len(completed_rewards),
         milestone_state_dir=milestone_state_dir,
         current_milestone=None,  # overridden by caller
-        threshold=0.40,
+        threshold=1.0,  # disabled — advancing too early causes catastrophic forgetting
     )
 
     if decision.should_advance:
@@ -914,35 +907,27 @@ def main():
 
     # Initial reward config from env vars (overridden later by reward advisor)
     reward_config: dict | None = None
-    time_penalty = float(os.getenv("TIME_PENALTY", "0"))
-    backtrack_penalty = float(os.getenv("BACKTRACK_PENALTY", "0"))
-    distance_bonus = float(os.getenv("DISTANCE_BONUS", "0"))
     directional_bonus = float(os.getenv("DIRECTIONAL_BONUS", "0"))
     grid_exploration = float(os.getenv("GRID_EXPLORATION", "0"))
     new_room_bonus = float(os.getenv("NEW_ROOM_BONUS", "0"))
+    exit_seeking = float(os.getenv("EXIT_SEEKING", "0"))
+    dialog_advance = float(os.getenv("DIALOG_ADVANCE", "50"))
     reward_overrides = {}
-    if time_penalty != 0:
-        reward_overrides["time_penalty"] = time_penalty
-        logger.info("Time penalty: %.4f per step", time_penalty)
-    if backtrack_penalty != 0:
-        reward_overrides["backtrack_penalty"] = backtrack_penalty
-        logger.info("Backtrack penalty: %.2f per room re-entry", backtrack_penalty)
-    if distance_bonus != 0:
-        reward_overrides["distance_bonus"] = distance_bonus
-        logger.info("Distance bonus: %.1f per new max Manhattan distance", distance_bonus)
     if directional_bonus != 0:
         reward_overrides["directional_bonus"] = directional_bonus
         logger.info("Directional bonus: %.1f per new eastward column", directional_bonus)
+    if exit_seeking != 0:
+        reward_overrides["exit_seeking"] = exit_seeking
+        logger.info("Exit seeking: %.2f per tile closer to frontier exit", exit_seeking)
     if grid_exploration != 0:
         reward_overrides["grid_exploration"] = grid_exploration
         logger.info("Grid exploration: %.3f per tile step", grid_exploration)
     if new_room_bonus != 0:
         reward_overrides["new_room"] = new_room_bonus
         logger.info("New room bonus: %.1f per unique room discovered", new_room_bonus)
-    wall_collision_str = os.getenv("WALL_COLLISION")
-    if wall_collision_str is not None:
-        reward_overrides["wall_collision"] = float(wall_collision_str)
-        logger.info("Wall collision penalty: %.4f per push step", float(wall_collision_str))
+    if dialog_advance != 0:
+        reward_overrides["dialog_advance"] = dialog_advance
+        logger.info("Dialog advance: %.1f per A-press during dialog (cap 20/episode)", dialog_advance)
     if reward_overrides:
         reward_config = reward_overrides
 

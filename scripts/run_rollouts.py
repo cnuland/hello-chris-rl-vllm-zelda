@@ -8,8 +8,7 @@ Runs the full training loop:
 
 Improvements over previous versions:
   - Entropy scheduling: linear decay from 0.05 → 0.005 across epochs
-  - Stagnation truncation: episodes end early if no new tiles for 3000 steps
-  - Coordinate decay: tile bonuses decay over time (0.9995/step)
+  - Binary exploration: first visit = bonus, revisit = 0 (PokemonRed-style)
   - Gamma 0.999: longer horizon for exploration
   - MinIO cleanup: old data is purged on fresh starts
   - Per-epoch timestep counting: each epoch trains for exactly EPOCH_STEPS
@@ -110,13 +109,11 @@ def make_wrapped_env(config: dict):
     wrapped = RewardWrapper(
         base_env,
         reward_config=config.get("reward_config"),
-        enable_rnd=config.get("enable_rnd", True),
         enable_shaping=config.get("enable_shaping", False),
         reward_model_path=config.get("reward_model_path"),
         enable_export=config.get("enable_export", True),
         s3_config=config.get("s3_config"),
         epoch=config.get("epoch", 0),
-        stagnation_limit=config.get("stagnation_limit", 5000),
     )
     return wrapped
 
@@ -301,11 +298,9 @@ def run_training_epoch(
         "render_mode": "rgb_array",
         "save_state_path": os.getenv("SAVE_STATE_PATH", ""),
         "epoch": epoch,
-        "enable_rnd": True,
         "enable_shaping": bool(rm_path),
         "reward_model_path": rm_path,
         "enable_export": True,
-        "stagnation_limit": 1500,  # Truncate after 1.5K steps without new tile
         "god_mode": god_mode,
     }
 
@@ -760,10 +755,9 @@ def run_reward_advisor(
             return None
 
         # Apply multipliers to base config — use env-var overrides as the
-        # base when available, so user-specified tuning (DISTANCE_BONUS,
-        # DIRECTIONAL_BONUS, GRID_EXPLORATION, TIME_PENALTY, etc.) is
-        # preserved across epochs instead of being silently replaced by
-        # code defaults.
+        # base when available, so user-specified tuning (DIRECTIONAL_BONUS,
+        # GRID_EXPLORATION, NEW_ROOM_BONUS, etc.) is preserved across
+        # epochs instead of being silently replaced by code defaults.
         if base_reward_config:
             base = {**RewardConfig().model_dump(), **base_reward_config}
         else:
@@ -899,7 +893,7 @@ def main():
     logger.info("Entropy schedule: %.4f → %.4f", entropy_start, entropy_end)
     logger.info("LR schedule: %.2e → %.2e", lr_start, lr_end)
     logger.info("God mode curriculum: first %d epochs", god_mode_epochs)
-    logger.info("Gamma: 0.999, Stagnation limit: 3000 steps (coord-based)")
+    logger.info("Gamma: 0.999, Binary exploration (PokemonRed-style)")
     logger.info("Evaluation: %s", "enabled" if run_eval else "disabled")
 
     # Clean old MinIO data for fresh start

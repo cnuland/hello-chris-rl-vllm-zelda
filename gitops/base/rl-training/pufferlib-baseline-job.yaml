@@ -1,6 +1,7 @@
-# Overnight run: PufferLib PPO with advancing checkpoints, 12-hour target.
-# GPU-accelerated, 96 envs, 2M steps/epoch, 24 epochs, god mode throughout.
-# Purpose: long-duration training with save state progression across epochs.
+# PufferLib PPO with massive milestone rewards + binary exploration.
+# Uses MIG 1g.18gb slice — plenty for our small policy network.
+# 192 envs for ~384 episodes/epoch, 4M steps/epoch, 24 epochs, god mode.
+# Room bonus dominates tile coverage; milestone rewards are 5-10x room bonus.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -34,13 +35,13 @@ spec:
         imagePullPolicy: Always
         resources:
           requests:
-            cpu: "12"
-            memory: 24Gi
-            nvidia.com/gpu: "1"
+            cpu: "16"
+            memory: 32Gi
+            nvidia.com/mig-1g.18gb: "1"
           limits:
             cpu: "24"
-            memory: 48Gi
-            nvidia.com/gpu: "1"
+            memory: 64Gi
+            nvidia.com/mig-1g.18gb: "1"
         env:
         # Training loop
         - name: EPOCH
@@ -48,13 +49,16 @@ spec:
         - name: MAX_EPOCHS
           value: "24"
         - name: EPOCH_STEPS
-          value: "2000000"
+          value: "4000000"
         - name: NUM_ENVS
-          value: "96"
+          value: "192"
         - name: NUM_WORKERS
           value: "12"
+        # 4M steps / 192 envs = 20,833 steps/env → ~2 episodes per env.
+        # Total: ~384 episodes per epoch for broad exploration coverage.
+        # 10K gives enough reach to cross 6-8 rooms per episode.
         - name: EPISODE_LENGTH
-          value: "30000"
+          value: "10000"
         - name: MINIBATCH_SIZE
           value: "2048"
         - name: USE_LSTM
@@ -73,25 +77,19 @@ spec:
           value: "1e-4"
         - name: GOD_MODE_EPOCHS
           value: "24"
-        - name: STAGNATION_LIMIT
-          value: "3000"
         - name: NUM_STEPS
           value: "256"
-        - name: TIME_PENALTY
-          value: "-0.001"
-        # Exploration bonuses — balanced to prevent cliff/barrier traps.
-        # Distance (any direction) + directional (toward target) + room bonus
-        # (per unique room) form a trio: room bonus motivates detours around
-        # obstacles, directional provides gentle northward bias, distance
-        # encourages spreading out.
-        - name: DISTANCE_BONUS
-          value: "5"
+        # Exploration: binary coverage (first visit = bonus, revisit = 0).
+        # Directional bonus nudges agent toward Maku Tree (NE of start).
+        # Exit-seeking gives per-step gradient toward exits to unvisited rooms.
         - name: DIRECTIONAL_BONUS
-          value: "12"
+          value: "5.0"
+        - name: EXIT_SEEKING
+          value: "0"
         - name: GRID_EXPLORATION
-          value: "0.05"
+          value: "0.03"
         - name: NEW_ROOM_BONUS
-          value: "15"
+          value: "50"
         # PPO core — increase updates per batch for stronger policy learning
         - name: UPDATE_EPOCHS
           value: "4"
@@ -99,6 +97,12 @@ spec:
           value: "0.1"
         - name: GAMMA
           value: "0.998"
+        # Dialog progression — reward for pressing A during dialog in
+        # Maku Tree (group 2) or indoor (group 3) areas only.
+        # 25 per A-press, capped at 20/episode.  Full Maku Tree
+        # conversation (~8 A-presses) = 200 reward.
+        - name: DIALOG_ADVANCE
+          value: "25"
         # Button entropy — separate higher coefficient on button action head
         # (NOP/A/B) to prevent collapse to always-NOP.  Without this the agent
         # never learns to use the sword because movement rewards dominate.
@@ -133,11 +137,11 @@ spec:
         - name: LLM_STATE_MODEL
           value: "qwen25-7b"
         - name: LLM_PUZZLE_MODEL
-          value: "qwen25-32b"
+          value: "qwen25-7b"
         - name: LLM_VISION_MODEL
           value: "qwen25-vl-32b"
         - name: LLM_ADVISOR_MODEL
-          value: "qwen25-32b"
+          value: "qwen25-7b"
         # Per-route URL overrides (uncomment to point to specific endpoints):
         # - name: LLM_STATE_URL
         #   value: "http://qwen25-7b.other-ns.svc:8000/v1/chat/completions"
@@ -148,6 +152,13 @@ spec:
         # - name: LLM_ADVISOR_URL
         #   value: "http://qwen25-32b.other-ns.svc:8000/v1/chat/completions"
         # Paths
+        # SDL2 dummy driver — PyBoy's "null" renderer breaks area
+        # transitions (Maku Tree entrance stuck at white screen).
+        # SDL2 + dummy gives headless rendering with working transitions.
+        - name: SDL_VIDEODRIVER
+          value: "dummy"
+        - name: SDL_AUDIODRIVER
+          value: "dummy"
         - name: ROM_PATH
           value: "/home/trainer/roms/zelda.gbc"
         - name: PYTHONPATH
