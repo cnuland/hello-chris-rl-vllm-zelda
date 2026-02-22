@@ -85,6 +85,8 @@ _ACTIVE_GROUP = 0xCC49       # wActiveGroup (0=overworld, 2=maku, 4-5=dungeons)
 _DUNGEON_INDEX = 0xCC55      # wDungeonIndex ($FF = overworld)
 _KEYS_PRESSED = 0xC481       # wKeysPressed (currently held buttons)
 _KEYS_JUST_PRESSED = 0xC482  # wKeysJustPressed (buttons pressed this frame)
+_LCDC = 0xFF40               # LCD Control register (bit 7 = LCD enable)
+_GAME_STATE = 0xC2EE         # wGameState (2 = normal gameplay)
 
 # Room collision data — populated per-room, 16 cols × 12 rows = 192 bytes
 _ROOM_COLLISIONS = 0xCE00
@@ -167,6 +169,7 @@ class ZeldaEnv(gym.Env):
         self._initial_deaths = 0
         self._last_movement: ZeldaAction | None = None
         self._last_button: ZeldaAction | None = None
+        self._lcd_off_steps = 0  # Consecutive steps with LCD disabled
         self._prev_room = 0
         self._last_valid_obs: np.ndarray | None = None
 
@@ -584,6 +587,7 @@ class ZeldaEnv(gym.Env):
         self.step_count = 0
         self.episode_count += 1
         self._initial_deaths = self._read16(_DEATH_COUNT)
+        self._lcd_off_steps = 0
         self._last_movement = None
         self._last_button = None
 
@@ -657,9 +661,21 @@ class ZeldaEnv(gym.Env):
         self._last_button = btn_act
 
         self.step_count += 1
+
+        # Detect stuck LCD state (Maku Tree warp leaves LCDC=0x00).
+        # The game runs but screen is white and Link is uninitialized.
+        # Early-truncate to avoid wasting thousands of training steps.
+        lcdc = self._read(_LCDC)
+        game_state = self._read(_GAME_STATE)
+        if (lcdc & 0x80) == 0 and game_state == 2:
+            self._lcd_off_steps += 1
+        else:
+            self._lcd_off_steps = 0
+
         obs = self._get_obs()
         terminated = self._check_terminated()
-        truncated = self.step_count >= self.max_steps
+        truncated = (self.step_count >= self.max_steps
+                     or self._lcd_off_steps >= 20)
         info = self._get_info()
 
         # During screen transitions, return cached observation.
@@ -792,6 +808,7 @@ class ZeldaEnv(gym.Env):
             "step": self.step_count,
             "episode": self.episode_count,
             "sprites": self.oam_sprite_count(),
+            "lcd_off": self._lcd_off_steps > 0,
         }
 
     def render(self):
