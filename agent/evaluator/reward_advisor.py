@@ -54,6 +54,8 @@ BASE_REWARDS: dict[str, float] = {
     "maku_room": 100.0,
     "maku_stage": 300.0,
     "directional_bonus": 0.0,
+    "snow_region": 0.0,
+    "maku_loiter_penalty": 1.0,
     "area_boost_overworld": 1.0,
     "area_boost_subrosia": 1.5,
     "area_boost_maku": 3.0,
@@ -85,6 +87,8 @@ ABS_CLAMPS: dict[str, tuple[float, float]] = {
     "area_boost_maku": (1.0, 8.0),
     "area_boost_indoors": (0.5, 3.0),
     "area_boost_dungeon": (1.0, 6.0),
+    "snow_region": (0.0, 5000.0),
+    "maku_loiter_penalty": (0.0, 5.0),
 }
 
 MULTIPLIER_BOUNDS = (0.5, 2.0)
@@ -130,6 +134,7 @@ class AdvisorOutput:
     directional_target: DirectionalTarget | None = None
     directives: list[Directive] = field(default_factory=list)
     weight_adjustments: dict[str, float] | None = None
+    phase_overrides: dict[str, dict] | None = None
     rationale: str = ""
 
 
@@ -199,11 +204,19 @@ class RewardAdvisor:
             result.get("weight_adjustments")
         )
 
+        # Phase profile overrides — optional per-phase reward profile tweaks
+        phase_overrides = result.get("phase_overrides")
+        if isinstance(phase_overrides, dict):
+            logger.info("Advisor phase overrides: %s", list(phase_overrides.keys()))
+        else:
+            phase_overrides = None
+
         output = AdvisorOutput(
             multipliers=multipliers,
             directional_target=directional_target,
             directives=directives,
             weight_adjustments=weight_adjustments,
+            phase_overrides=phase_overrides,
             rationale=rationale,
         )
 
@@ -424,6 +437,7 @@ class RewardAdvisor:
                 ("total_maku_stage", "Maku Tree Stage Up"),
                 ("total_maku_dialog", "Maku Tree Dialog"),
                 ("total_gnarled_key", "Got Gnarled Key"),
+                ("total_entered_snow_region", "Entered Snow Region"),
                 ("total_entered_dungeon", "Entered Dungeon"),
                 ("total_maku_seed", "Got Maku Seed"),
             ]:

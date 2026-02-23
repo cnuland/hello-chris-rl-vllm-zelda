@@ -13,3 +13,7 @@ old/
 *.gbc
 *.gbc.state
 *.gbc.ram
+
+# Allow milestone save states to be tracked
+!milestones/**/*.state
+!milestones/**/*.gbc.state

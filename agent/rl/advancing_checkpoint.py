@@ -7,7 +7,7 @@ re-traversing already-mastered sections of the game.
 
 Milestone hierarchy (ordered by game progression):
     got_sword → visited_maku_tree → gate_slashed → maku_dialog
-    → gnarled_key → entered_dungeon
+    → gnarled_key → entered_snow_region → entered_dungeon
 
 Save states are captured by RewardWrapper._capture_milestone_state() during
 training and written to MILESTONE_STATE_DIR as .state files with .json
@@ -30,6 +30,7 @@ MILESTONE_ORDER = [
     "gate_slashed",
     "maku_dialog",
     "gnarled_key",
+    "entered_snow_region",
     "entered_dungeon",
 ]
 
@@ -41,6 +42,7 @@ MILESTONE_TO_COUNT_KEY = {
     "gate_slashed": "total_gate_slashed",
     "maku_dialog": "total_maku_dialog",
     "gnarled_key": "total_gnarled_key",
+    "entered_snow_region": "total_entered_snow_region",
     "entered_dungeon": "total_entered_dungeon",
 }
 

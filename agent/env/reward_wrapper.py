@@ -44,6 +44,7 @@ from agent.env.ram_addresses import (
 # The Maku Tree gate is on the OVERWORLD (group 0) at room 0xD9 (row=13, col=9).
 # When slashed, bit 7 (0x80) is set at OVERWORLD_ROOM_FLAGS + 0xD9 = 0xC7D9.
 MAKU_GATE_ROOM = 0xD9
+from agent.env.phase_rewards import PhaseManager
 from agent.rl.rewards import CoverageReward, PotentialShaping
 
 logger = logging.getLogger(__name__)
@@ -151,6 +152,13 @@ class RewardWrapper(gym.Wrapper):
         # Dungeon 1 at (row=10, col=4).
         self._post_key_directional_activated = False
         self._maku_loiter_penalty = cfg.get("maku_loiter_penalty", 1.0)
+
+        # Phase-driven reward management — replaces scattered
+        # ``if has_gnarled_key_now:`` checks with declarative profiles.
+        self._phase_manager = PhaseManager()
+        phase_overrides = cfg.get("phase_overrides", {})
+        for phase_name, overrides in phase_overrides.items():
+            self._phase_manager.merge_advisor_overrides(phase_name, overrides)
 
         # Snow region milestone — massive one-time bonus for reaching the
         # snowy northwest area (path to Dungeon 1 / Gnarled Root).
@@ -422,6 +430,23 @@ class RewardWrapper(gym.Wrapper):
         self._a_press_rooms.clear()
         self._current_button = 0
         self._post_key_directional_activated = False
+
+        # Detect initial phase from save state baseline and apply
+        # the profile's directional target if applicable.
+        initial_phase = self._phase_manager.reset(
+            sword_level=self._prev_sword,
+            has_gnarled_key=self._prev_gnarled_key,
+            active_group=self._prev_group,
+            baseline_sword=self._baseline_sword,
+            baseline_gnarled_key=self._baseline_gnarled_key,
+        )
+        profile = self._phase_manager.active_profile
+        if profile.directional_target is not None:
+            self._directional_target_row = profile.directional_target[0]
+            self._directional_target_col = profile.directional_target[1]
+            if profile.directional_bonus > 0 and self._directional_bonus == 0.0:
+                self._directional_bonus = profile.directional_bonus
+
         if self._shaping:
             self._shaping.reset()
 
@@ -492,6 +517,7 @@ class RewardWrapper(gym.Wrapper):
         info["unique_rooms"] = new_rooms
         info["unique_tiles"] = self._coverage.total_tiles
         info["seen_coords"] = self._coverage.total_tiles
+        info["current_phase"] = self._phase_manager.current_phase
 
         # Progression milestones
         info["milestone_got_sword"] = float(self._milestone_got_sword)
@@ -584,8 +610,9 @@ class RewardWrapper(gym.Wrapper):
             self._milestone_achieved_this_step = True
             self._capture_milestone_state("entered_dungeon", reward)
 
-        # Maku Tree visit bonus — suppressed after Gnarled Key to prevent farming
-        if active_group == 2 and self._prev_group != 2 and not has_gnarled_key_now:
+        # Maku Tree visit bonus — suppressed in post-key phases
+        if (active_group == 2 and self._prev_group != 2
+                and not self._phase_manager.is_reward_suppressed("maku_tree_visit")):
             reward += self._maku_tree_visit_bonus
             self._milestone_achieved_this_step = True
             self._capture_milestone_state("visited_maku_tree", reward)
@@ -617,12 +644,9 @@ class RewardWrapper(gym.Wrapper):
         # (required to get the Gnarled Key quest).
         if hasattr(self.env, "_read"):
             dialog_value = self.env._read(DIALOG_STATE)
-            # After Gnarled Key: Maku Tree dialog is no longer quest-relevant,
-            # only reward dialog in group 3 (indoors / dungeon NPCs).
-            if has_gnarled_key_now:
-                in_quest_area = active_group == 3
-            else:
-                in_quest_area = active_group in (2, 3)  # Maku Tree or indoors
+            # Phase-driven dialog area restriction — each phase defines which
+            # area groups qualify for dialog advance rewards.
+            in_quest_area = active_group in self._phase_manager.get_dialog_advance_groups()
             if (dialog_active and in_quest_area
                     and self._dialog_advance_count < self._dialog_advance_cap):
                 # Reward A-presses during dialog — directly teaches "press A to advance text"
@@ -692,12 +716,13 @@ class RewardWrapper(gym.Wrapper):
                 self._capture_milestone_state("gate_slashed", reward)
 
         # --- Maku Tree sub-event rewards (group 2 interior) ---
-        # Suppressed after Gnarled Key obtained to prevent farming.
-        if active_group == 2 and hasattr(self.env, "_read") and not has_gnarled_key_now:
+        # Phase-driven suppression replaces hardcoded has_gnarled_key_now check.
+        if active_group == 2 and hasattr(self.env, "_read"):
             room_id = info.get("room_id", 0)
 
-            # New rooms within group 2
-            if room_id not in self._maku_rooms_visited:
+            # New rooms within group 2 — suppressed in post-key phases
+            if (room_id not in self._maku_rooms_visited
+                    and not self._phase_manager.is_reward_suppressed("maku_room")):
                 self._maku_rooms_visited.add(room_id)
                 reward += self._maku_room_bonus
                 self._milestone_achieved_this_step = True
@@ -706,9 +731,11 @@ class RewardWrapper(gym.Wrapper):
                     room_id, len(self._maku_rooms_visited), self._maku_room_bonus,
                 )
 
-            # Maku Tree stage change
+            # Maku Tree stage change — suppressed in post-key phases
             maku_stage = self.env._read(MAKU_TREE_STAGE)
-            if maku_stage != self._prev_maku_stage and maku_stage > self._baseline_maku_stage:
+            if (maku_stage != self._prev_maku_stage
+                    and maku_stage > self._baseline_maku_stage
+                    and not self._phase_manager.is_reward_suppressed("maku_stage")):
                 reward += self._maku_stage_bonus
                 self._milestone_achieved_this_step = True
                 logger.info(
@@ -717,25 +744,15 @@ class RewardWrapper(gym.Wrapper):
                 )
             self._prev_maku_stage = maku_stage
 
-        # --- Post-Gnarled-Key: directional guidance + Maku penalty ---
-        if has_gnarled_key_now and not self._post_key_directional_activated:
-            self._post_key_directional_activated = True
-            self._directional_target_row = 10  # Dungeon 1 entrance
-            self._directional_target_col = 4
-            if self._directional_bonus == 0.0:
-                self._directional_bonus = 50.0
-            room_id = info.get("room_id", 0)
-            self._min_target_distance = (
-                abs(room_id // 16 - 10) + abs(room_id % 16 - 4)
-            )
-            logger.info(
-                "POST-KEY: Activated directional bonus (%.1f) toward "
-                "Dungeon 1 (row=10, col=4), current distance=%d",
-                self._directional_bonus, self._min_target_distance,
-            )
-
-        # Per-step penalty for loitering in Maku Tree after getting the key
-        if has_gnarled_key_now and active_group == 2:
+        # --- Phase-driven loiter penalty ---
+        # Replaces hardcoded ``if has_gnarled_key_now and active_group == 2``
+        # with profile-based penalty lookup.  Falls back to env-var-configured
+        # _maku_loiter_penalty for backward compat.
+        phase_loiter = self._phase_manager.get_loiter_penalty(active_group)
+        if phase_loiter > 0:
+            reward -= phase_loiter
+        elif has_gnarled_key_now and active_group == 2 and self._maku_loiter_penalty > 0:
+            # Legacy fallback when loiter_penalties not set in profile
             reward -= self._maku_loiter_penalty
 
         # --- Snow region milestone (post-Gnarled-Key) ---
@@ -758,6 +775,33 @@ class RewardWrapper(gym.Wrapper):
                     cur_row, cur_col, self._snow_region_bonus,
                 )
                 self._capture_milestone_state("entered_snow_region", reward)
+
+        # --- Phase re-detection on milestone events ---
+        # When any milestone fires, re-detect the game phase and apply
+        # the new profile's directional target if it changed.
+        if self._milestone_achieved_this_step:
+            phase_changed = self._phase_manager.update_phase(
+                sword_level=self._prev_sword,
+                has_gnarled_key=has_gnarled_key_now,
+                active_group=active_group,
+                entered_snow_region=self._entered_snow_region,
+                baseline_sword=self._baseline_sword,
+                baseline_gnarled_key=self._baseline_gnarled_key,
+                step=info.get("step", 0),
+            )
+            if phase_changed:
+                profile = self._phase_manager.active_profile
+                if profile.directional_target is not None:
+                    self._directional_target_row = profile.directional_target[0]
+                    self._directional_target_col = profile.directional_target[1]
+                    if profile.directional_bonus > 0 and self._directional_bonus == 0.0:
+                        self._directional_bonus = profile.directional_bonus
+                    # Reset min distance for new target
+                    room_id = info.get("room_id", 0)
+                    self._min_target_distance = (
+                        abs(room_id // 16 - self._directional_target_row)
+                        + abs(room_id % 16 - self._directional_target_col)
+                    )
 
         # --- Sword interaction bonus ---
         if self._sword_use_bonus > 0 and self._current_button == ButtonAction.A:

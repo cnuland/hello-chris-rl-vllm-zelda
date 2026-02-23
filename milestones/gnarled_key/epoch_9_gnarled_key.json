@@ -1,0 +1,8 @@
+{
+  "percentage": 1.0,
+  "episodes": 384,
+  "mean_reward": 16907.246491109767,
+  "milestone": "gnarled_key",
+  "epoch": 9,
+  "s3_key": "save-states/advancing/epoch_9_gnarled_key.state"
+}
