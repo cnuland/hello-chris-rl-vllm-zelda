@@ -257,6 +257,9 @@ def upload_metadata(epoch: int, metadata: dict) -> None:
 # Info extraction
 # ---------------------------------------------------------------------------
 
+_infos_debug_logged = False
+
+
 def _extract_env_info(infos, env_idx: int) -> dict:
     """Safely extract per-env info dict from PufferLib vectorized infos.
 
@@ -265,23 +268,53 @@ def _extract_env_info(infos, env_idx: int) -> dict:
       - dict of arrays: infos["key"][i] is a scalar
       - None / empty
     """
+    global _infos_debug_logged
     if infos is None:
         return {}
+
+    # One-time diagnostic: log the actual structure PufferLib returns
+    if not _infos_debug_logged:
+        _infos_debug_logged = True
+        try:
+            info_type = type(infos).__name__
+            info_len = len(infos) if hasattr(infos, "__len__") else "N/A"
+            sample = ""
+            if isinstance(infos, (list, tuple)) and len(infos) > 0:
+                first = infos[0]
+                sample = f"first_type={type(first).__name__}"
+                if isinstance(first, dict):
+                    milestone_keys = [k for k in first if k.startswith("milestone_")]
+                    sample += f", keys={list(first.keys())[:10]}, milestone_keys={milestone_keys}"
+            elif isinstance(infos, dict):
+                sample = f"keys={list(infos.keys())[:10]}"
+            logger.info(
+                "INFOS_DEBUG: type=%s, len=%s, env_idx=%d, %s",
+                info_type, info_len, env_idx, sample,
+            )
+        except Exception as e:
+            logger.warning("INFOS_DEBUG: failed to inspect: %s", e)
+
     # List of dicts (most common with PufferLib Multiprocessing)
     if isinstance(infos, (list, tuple)) and len(infos) > env_idx:
         entry = infos[env_idx]
         if isinstance(entry, dict):
             return entry
         return {}
-    # Dict of arrays / lists
+    # Dict of arrays / lists (e.g., averaged scalars from _avg_infos)
     if isinstance(infos, dict):
         result = {}
         for key, val in infos.items():
             try:
                 if hasattr(val, "__getitem__") and len(val) > env_idx:
                     result[key] = val[env_idx]
+                elif isinstance(val, (int, float, np.integer, np.floating)):
+                    # Scalar value (e.g., from PufferLib _avg_infos averaging).
+                    # Use the scalar directly — better than losing all data.
+                    result[key] = val
             except (TypeError, IndexError):
-                pass
+                # numpy scalars raise TypeError on len(); use value directly
+                if isinstance(val, (np.integer, np.floating)):
+                    result[key] = float(val)
         return result
     return {}
 
@@ -326,8 +359,8 @@ def run_training_epoch(
 
     logger.info("=== EPOCH %d TRAINING ===", epoch)
     logger.info(
-        "Envs: %d, Workers: %d, Steps: %s, LR: %.2e, Entropy: %.4f",
-        num_envs, num_workers, f"{epoch_steps:,}", lr, entropy_coeff,
+        "Envs: %d, Workers: %d, Steps: %s, EpLen: %s, LR: %.2e, Entropy: %.4f",
+        num_envs, num_workers, f"{epoch_steps:,}", f"{ep_length:,}", lr, entropy_coeff,
     )
     if god_mode:
         logger.info("GOD MODE: enabled")
@@ -515,6 +548,30 @@ def run_training_epoch(
                     # Extract game milestones from env info.
                     # PufferLib returns infos as list-of-dicts or dict-of-arrays.
                     env_info = _extract_env_info(infos, i)
+
+                    # Debug: log first episode's milestone extraction
+                    if len(completed_rewards) <= 2:
+                        milestone_vals = {
+                            k: env_info.get(k, "MISSING")
+                            for k in [
+                                "milestone_gate_slashed",
+                                "milestone_gnarled_key",
+                                "milestone_visited_maku_tree",
+                                "current_phase",
+                            ]
+                        }
+                        logger.info(
+                            "MILESTONE_DEBUG: env=%d, ep_len=%d, "
+                            "infos_type=%s, infos_len=%s, "
+                            "env_info_keys=%d, milestones=%s",
+                            i,
+                            completed_lengths[-1],
+                            type(infos).__name__,
+                            len(infos) if hasattr(infos, "__len__") else "?",
+                            len(env_info),
+                            milestone_vals,
+                        )
+
                     if env_info:
                         if env_info.get("milestone_got_sword", 0) > 0:
                             milestones["total_got_sword"] += 1
@@ -835,6 +892,60 @@ def run_training_epoch(
 
 
 # ---------------------------------------------------------------------------
+# Curriculum Episode Length
+# ---------------------------------------------------------------------------
+
+# Each stage defines: (milestone_key, threshold, next_episode_length)
+# When the milestone is achieved in >= threshold fraction of episodes,
+# the episode length advances to the next level.
+CURRICULUM_STAGES = [
+    # Stage 0: Start short. Once most episodes slash the gate → lengthen.
+    ("total_gate_slashed", 0.80, 60_000),
+    # Stage 1: Once half of episodes get the Gnarled Key → lengthen more.
+    ("total_gnarled_key", 0.50, 100_000),
+    # Stage 2: Once agents start reaching the snow region → full length.
+    ("total_entered_snow_region", 0.20, 150_000),
+]
+
+
+def curriculum_update_episode_length(
+    current_length: int,
+    max_length: int,
+    milestones: dict,
+    episodes_completed: int,
+) -> int:
+    """Check milestone achievement and return the next episode length.
+
+    Walks through CURRICULUM_STAGES in order.  Each stage is gated on the
+    *previous* stage's milestone being met — we never skip ahead.
+    Returns the current length if no stage threshold is newly met.
+    """
+    if episodes_completed <= 0:
+        return current_length
+
+    for milestone_key, threshold, next_length in CURRICULUM_STAGES:
+        if current_length >= next_length:
+            # Already past this stage
+            continue
+        achieved = milestones.get(milestone_key, 0)
+        rate = achieved / episodes_completed
+        if rate >= threshold:
+            new_length = min(next_length, max_length)
+            logger.info(
+                "CURRICULUM: %s achieved %.0f%% (>= %.0f%%) — "
+                "episode length %s -> %s",
+                milestone_key, rate * 100, threshold * 100,
+                f"{current_length:,}", f"{new_length:,}",
+            )
+            return new_length
+        else:
+            # Must satisfy this stage before checking the next
+            break
+
+    return current_length
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -845,6 +956,8 @@ def main():
     num_envs = int(os.getenv("NUM_ENVS", "24"))
     num_workers = int(os.getenv("NUM_WORKERS", "8"))
     ep_length = int(os.getenv("EPISODE_LENGTH", "30000"))
+    ep_length_max = int(os.getenv("EPISODE_LENGTH_MAX", str(ep_length)))
+    curriculum_enabled = os.getenv("CURRICULUM", "false").lower() in ("true", "1", "yes")
     num_steps = int(os.getenv("NUM_STEPS", "128"))
     minibatch_size = int(os.getenv("MINIBATCH_SIZE", "2048"))
     use_lstm = os.getenv("USE_LSTM", "false").lower() in ("true", "1", "yes")
@@ -895,6 +1008,14 @@ def main():
     logger.info("Entropy: %.4f -> %.4f, LR: %.2e -> %.2e",
                 entropy_start, entropy_end, lr_start, lr_end)
     logger.info("God mode: first %d epochs", god_mode_epochs)
+    if curriculum_enabled:
+        logger.info(
+            "Curriculum: episode length %s -> %s (auto-scaling on milestones)",
+            f"{ep_length:,}", f"{ep_length_max:,}",
+        )
+        for mkey, thresh, next_len in CURRICULUM_STAGES:
+            if next_len <= ep_length_max:
+                logger.info("  Stage: %s >= %.0f%% -> %s steps", mkey, thresh * 100, f"{next_len:,}")
 
     if clean_start and start_epoch == 0:
         logger.info("Cleaning old MinIO data...")
@@ -1064,7 +1185,21 @@ def main():
                 reward_config = advised_config
                 logger.info("Next epoch uses LLM-adjusted reward config")
 
-        # Phase 3: Cleanup storage
+        # Phase 3: Curriculum episode length adjustment
+        if curriculum_enabled:
+            epoch_milestones = metadata.get("milestones", {})
+            episodes_done = metadata.get("episodes_completed", 0)
+            new_ep_length = curriculum_update_episode_length(
+                ep_length, ep_length_max, epoch_milestones, episodes_done,
+            )
+            if new_ep_length != ep_length:
+                logger.info(
+                    "CURRICULUM ADVANCE: episode length %s -> %s (epoch %d)",
+                    f"{ep_length:,}", f"{new_ep_length:,}", epoch,
+                )
+                ep_length = new_ep_length
+
+        # Phase 4: Cleanup storage
         cleanup_after_epoch(epoch, global_best_checkpoint)
 
         logger.info("Epoch %d complete.", epoch)
