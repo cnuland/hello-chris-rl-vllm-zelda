@@ -150,6 +150,7 @@ class RewardWrapper(gym.Wrapper):
         # Maku Tree farming rewards and activate directional guidance toward
         # Dungeon 1 at (row=10, col=4).
         self._post_key_directional_activated = False
+        self._maku_loiter_penalty = cfg.get("maku_loiter_penalty", 1.0)
 
         # Structured directives from the LLM reward advisor — processed as
         # one-time bonuses or per-step penalties based on area/action conditions.
@@ -721,7 +722,7 @@ class RewardWrapper(gym.Wrapper):
 
         # Per-step penalty for loitering in Maku Tree after getting the key
         if has_gnarled_key_now and active_group == 2:
-            reward -= 5.0
+            reward -= self._maku_loiter_penalty
 
         # --- Sword interaction bonus ---
         if self._sword_use_bonus > 0 and self._current_button == ButtonAction.A:

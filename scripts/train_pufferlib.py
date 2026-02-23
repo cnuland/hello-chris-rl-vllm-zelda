@@ -912,7 +912,11 @@ def main():
     new_room_bonus = float(os.getenv("NEW_ROOM_BONUS", "0"))
     exit_seeking = float(os.getenv("EXIT_SEEKING", "0"))
     dialog_advance = float(os.getenv("DIALOG_ADVANCE", "50"))
+    maku_loiter_penalty = float(os.getenv("MAKU_LOITER_PENALTY", "0"))
     reward_overrides = {}
+    if maku_loiter_penalty != 0:
+        reward_overrides["maku_loiter_penalty"] = maku_loiter_penalty
+        logger.info("Maku loiter penalty: %.1f per step in group 2 after key", maku_loiter_penalty)
     if directional_bonus != 0:
         reward_overrides["directional_bonus"] = directional_bonus
         logger.info("Directional bonus: %.1f per new eastward column", directional_bonus)
