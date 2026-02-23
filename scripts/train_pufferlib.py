@@ -430,6 +430,7 @@ def run_training_epoch(
         "total_maku_stage": 0,
         "total_maku_dialog": 0,
         "total_gnarled_key": 0,
+        "total_entered_snow_region": 0,
         "total_maku_seed": 0,
         "max_rooms": 0,
         "max_tiles": 0,
@@ -529,6 +530,8 @@ def run_training_epoch(
                             milestones["total_maku_stage"] += 1
                         if env_info.get("milestone_gnarled_key", 0) > 0:
                             milestones["total_gnarled_key"] += 1
+                        if env_info.get("milestone_entered_snow_region", 0) > 0:
+                            milestones["total_entered_snow_region"] += 1
                         if env_info.get("milestone_maku_seed", 0) > 0:
                             milestones["total_maku_seed"] += 1
                         milestones["max_maku_rooms"] = max(
@@ -773,6 +776,7 @@ def run_training_epoch(
     logger.info("  Maku Tree stage up:   %d/%d episodes", milestones["total_maku_stage"], n_eps)
     logger.info("  Maku Tree dialog:     %d/%d episodes", milestones["total_maku_dialog"], n_eps)
     logger.info("  Got Gnarled Key:      %d/%d episodes", milestones["total_gnarled_key"], n_eps)
+    logger.info("  Entered snow region:  %d/%d episodes", milestones["total_entered_snow_region"], n_eps)
     logger.info("  Got Maku Seed:        %d/%d episodes", milestones["total_maku_seed"], n_eps)
     logger.info("  Entered dungeon:      %d/%d episodes", milestones["total_entered_dungeon"], n_eps)
     logger.info("  Max essences:         %d", milestones["max_essences"])
@@ -913,7 +917,11 @@ def main():
     exit_seeking = float(os.getenv("EXIT_SEEKING", "0"))
     dialog_advance = float(os.getenv("DIALOG_ADVANCE", "50"))
     maku_loiter_penalty = float(os.getenv("MAKU_LOITER_PENALTY", "0"))
+    snow_region_bonus = float(os.getenv("SNOW_REGION_BONUS", "0"))
     reward_overrides = {}
+    if snow_region_bonus != 0:
+        reward_overrides["snow_region"] = snow_region_bonus
+        logger.info("Snow region milestone: %.0f bonus for entering snowy northwest", snow_region_bonus)
     if maku_loiter_penalty != 0:
         reward_overrides["maku_loiter_penalty"] = maku_loiter_penalty
         logger.info("Maku loiter penalty: %.1f per step in group 2 after key", maku_loiter_penalty)

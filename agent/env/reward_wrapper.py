@@ -152,6 +152,16 @@ class RewardWrapper(gym.Wrapper):
         self._post_key_directional_activated = False
         self._maku_loiter_penalty = cfg.get("maku_loiter_penalty", 1.0)
 
+        # Snow region milestone — massive one-time bonus for reaching the
+        # snowy northwest area (path to Dungeon 1 / Gnarled Root).
+        # Only fires after Gnarled Key is obtained.
+        self._snow_region_bonus = cfg.get("snow_region", 0.0)
+        self._snow_region_max_row = int(cfg.get("snow_region_max_row",
+                                                 os.getenv("SNOW_REGION_MAX_ROW", "11")))
+        self._snow_region_max_col = int(cfg.get("snow_region_max_col",
+                                                 os.getenv("SNOW_REGION_MAX_COL", "5")))
+        self._entered_snow_region = False
+
         # Structured directives from the LLM reward advisor — processed as
         # one-time bonuses or per-step penalties based on area/action conditions.
         self._directives = cfg.get("directives", [])
@@ -200,6 +210,7 @@ class RewardWrapper(gym.Wrapper):
         self._milestone_got_sword = False
         self._milestone_entered_dungeon = False
         self._milestone_visited_maku_tree = False
+        self._milestone_entered_snow_region = False
         self._milestone_essences = 0
         self._milestone_dungeon_keys = 0
         self._milestone_max_rooms = 0
@@ -393,6 +404,7 @@ class RewardWrapper(gym.Wrapper):
         self._milestone_got_sword = False
         self._milestone_entered_dungeon = False
         self._milestone_visited_maku_tree = False
+        self._milestone_entered_snow_region = False
         self._milestone_essences = 0
         self._milestone_dungeon_keys = 0
         self._milestone_max_rooms = 0
@@ -404,6 +416,7 @@ class RewardWrapper(gym.Wrapper):
         self._baseline_maku_stage = self._prev_maku_stage
         self._baseline_group = self._prev_group
         self._gate_slashed = False
+        self._entered_snow_region = False
         self._maku_rooms_visited.clear()
         self._captured_milestones.clear()
         self._a_press_rooms.clear()
@@ -497,6 +510,7 @@ class RewardWrapper(gym.Wrapper):
             self._prev_maku_seed and not self._baseline_maku_seed
         )
         info["milestone_gate_slashed"] = float(self._gate_slashed)
+        info["milestone_entered_snow_region"] = float(self._milestone_entered_snow_region)
         info["milestone_maku_rooms"] = float(len(self._maku_rooms_visited))
         info["milestone_maku_stage"] = float(
             self._prev_maku_stage > self._baseline_maku_stage
@@ -723,6 +737,27 @@ class RewardWrapper(gym.Wrapper):
         # Per-step penalty for loitering in Maku Tree after getting the key
         if has_gnarled_key_now and active_group == 2:
             reward -= self._maku_loiter_penalty
+
+        # --- Snow region milestone (post-Gnarled-Key) ---
+        # Massive one-time bonus for reaching the snowy northwest area,
+        # which is on the path to Dungeon 1 / Gnarled Root.
+        if (has_gnarled_key_now
+                and self._snow_region_bonus > 0
+                and not self._entered_snow_region
+                and active_group == 0):
+            room_id = info.get("room_id", 0)
+            cur_row = room_id // 16
+            cur_col = room_id % 16
+            if cur_row <= self._snow_region_max_row and cur_col <= self._snow_region_max_col:
+                self._entered_snow_region = True
+                self._milestone_entered_snow_region = True
+                self._milestone_achieved_this_step = True
+                reward += self._snow_region_bonus
+                logger.info(
+                    "MILESTONE: Entered snow region at room (%d,%d)! (+%.0f)",
+                    cur_row, cur_col, self._snow_region_bonus,
+                )
+                self._capture_milestone_state("entered_snow_region", reward)
 
         # --- Sword interaction bonus ---
         if self._sword_use_bonus > 0 and self._current_button == ButtonAction.A:
