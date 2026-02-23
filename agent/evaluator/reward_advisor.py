@@ -491,4 +491,21 @@ class RewardAdvisor:
             "What is the biggest bottleneck preventing progress to the next phase?"
         )
 
+        # Phase-specific supplemental notes
+        if phase == "pre_dungeon":
+            parts.append(
+                "\n\nPHASE-SPECIFIC NOTES (pre_dungeon):\n"
+                "The agent has the Gnarled Key. The reward wrapper now SUPPRESSES "
+                "all Maku Tree rewards (visit bonus, dialog advance, room discovery, "
+                "stage change) and applies a per-step penalty for loitering in group 2. "
+                "A directional bonus toward Dungeon 1 at (row=10, col=4) is ACTIVE.\n"
+                "Focus your advice on:\n"
+                "- Increasing directional_target scale if the agent is not moving west\n"
+                "- Adding avoid_region directive for group 2 (Maku Tree) to reinforce\n"
+                "- Increasing new_room and grid_exploration multipliers to incentivize "
+                "overworld exploration\n"
+                "- The path is: EXIT Maku Tree → go WEST → then NORTH to snowy region\n"
+                "- Dungeon 1 entrance is at approximately (row=10, col=4) on the overworld"
+            )
+
         return "\n".join(parts)

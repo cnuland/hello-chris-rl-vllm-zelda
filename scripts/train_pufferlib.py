@@ -793,7 +793,7 @@ def run_training_epoch(
         episodes_completed=len(completed_rewards),
         milestone_state_dir=milestone_state_dir,
         current_milestone=None,  # overridden by caller
-        threshold=1.0,  # disabled — advancing too early causes catastrophic forgetting
+        threshold=0.40,  # 40% of episodes must achieve milestone before advancing
     )
 
     if decision.should_advance:

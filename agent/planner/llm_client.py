@@ -79,6 +79,13 @@ ROUTE_URL_OVERRIDES = {
     "advisor": os.getenv("LLM_ADVISOR_URL", ""),
 }
 
+# Fallback routes — if the primary model is unavailable after all retries,
+# try these alternative routes.  Used when qwen25-32b is scaled to 0.
+ROUTE_FALLBACKS: dict[str, str] = {
+    "puzzle": os.getenv("LLM_PUZZLE_FALLBACK", "state"),    # 32b → 7b
+    "advisor": os.getenv("LLM_ADVISOR_FALLBACK", "state"),  # 32b → 7b
+}
+
 
 class LLMClient:
     """HTTP client for RHOAI 3 llm-d inference gateway."""
@@ -232,6 +239,7 @@ class LLMClient:
         messages: list[dict],
         max_tokens: int = 256,
         temperature: float = 0.1,
+        _is_fallback: bool = False,
     ) -> dict[str, Any]:
         """Make an HTTP call with retries and JSON parsing.
 
@@ -239,6 +247,10 @@ class LLMClient:
           1. Per-route URL override (LLM_{ROUTE}_URL env var) — most flexible
           2. Direct workload service (LLM_USE_DIRECT=true) — in-cluster default
           3. Gateway mode (LLM_USE_DIRECT=false) — through llm-d gateway
+
+        If all retries fail and a ROUTE_FALLBACKS entry exists, the call
+        is retried on the fallback route (e.g. puzzle → state when
+        qwen25-32b is scaled to 0).
         """
         model_name = MODEL_ROUTES.get(route.lstrip("/"), route.lstrip("/"))
         url = self._resolve_url(route, model_name)
@@ -284,6 +296,20 @@ class LLMClient:
                     wait,
                 )
                 time.sleep(wait)
+
+        # Try fallback route if primary route exhausted retries
+        clean_route = route.lstrip("/")
+        if not _is_fallback and clean_route in ROUTE_FALLBACKS:
+            fallback = ROUTE_FALLBACKS[clean_route]
+            logger.warning(
+                "LLM %s failed — trying fallback route '%s' (%s)",
+                route, fallback, MODEL_ROUTES.get(fallback, fallback),
+            )
+            return self._call(
+                fallback, messages,
+                max_tokens=max_tokens, temperature=temperature,
+                _is_fallback=True,
+            )
 
         logger.error("LLM %s failed after %d retries: %s", route, self._max_retries, last_error)
         return {"error": str(last_error), "route": route}

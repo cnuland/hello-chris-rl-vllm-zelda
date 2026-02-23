@@ -146,6 +146,11 @@ class RewardWrapper(gym.Wrapper):
         self._directional_target_scale = float(cfg.get("directional_target_scale", "1.0"))
         self._min_target_distance = 999
 
+        # Post-Gnarled-Key phase: once the agent has the key, suppress all
+        # Maku Tree farming rewards and activate directional guidance toward
+        # Dungeon 1 at (row=10, col=4).
+        self._post_key_directional_activated = False
+
         # Structured directives from the LLM reward advisor — processed as
         # one-time bonuses or per-step penalties based on area/action conditions.
         self._directives = cfg.get("directives", [])
@@ -402,6 +407,7 @@ class RewardWrapper(gym.Wrapper):
         self._captured_milestones.clear()
         self._a_press_rooms.clear()
         self._current_button = 0
+        self._post_key_directional_activated = False
         if self._shaping:
             self._shaping.reset()
 
@@ -548,14 +554,23 @@ class RewardWrapper(gym.Wrapper):
         active_group = info.get("active_group", 0)
         dungeon_floor = info.get("dungeon_floor", 0)
 
+        # Post-Gnarled-Key reward gating: once the agent has the key,
+        # suppress ALL Maku Tree farming rewards so the agent pivots
+        # toward Dungeon 1 instead of looping between gate and tree.
+        has_gnarled_key_now = False
+        if hasattr(self.env, "_read"):
+            has_gnarled_key_now = bool(
+                self.env._read(GNARLED_KEY_OBTAINED) & GNARLED_KEY_OBTAINED_MASK
+            )
+
         # Dungeon entry bonus
         if active_group in (4, 5) and self._prev_group not in (4, 5):
             reward += self._dungeon_entry_bonus
             self._milestone_achieved_this_step = True
             self._capture_milestone_state("entered_dungeon", reward)
 
-        # Maku Tree visit bonus
-        if active_group == 2 and self._prev_group != 2:
+        # Maku Tree visit bonus — suppressed after Gnarled Key to prevent farming
+        if active_group == 2 and self._prev_group != 2 and not has_gnarled_key_now:
             reward += self._maku_tree_visit_bonus
             self._milestone_achieved_this_step = True
             self._capture_milestone_state("visited_maku_tree", reward)
@@ -587,7 +602,12 @@ class RewardWrapper(gym.Wrapper):
         # (required to get the Gnarled Key quest).
         if hasattr(self.env, "_read"):
             dialog_value = self.env._read(DIALOG_STATE)
-            in_quest_area = active_group in (2, 3)  # Maku Tree or indoors
+            # After Gnarled Key: Maku Tree dialog is no longer quest-relevant,
+            # only reward dialog in group 3 (indoors / dungeon NPCs).
+            if has_gnarled_key_now:
+                in_quest_area = active_group == 3
+            else:
+                in_quest_area = active_group in (2, 3)  # Maku Tree or indoors
             if (dialog_active and in_quest_area
                     and self._dialog_advance_count < self._dialog_advance_cap):
                 # Reward A-presses during dialog — directly teaches "press A to advance text"
@@ -657,7 +677,8 @@ class RewardWrapper(gym.Wrapper):
                 self._capture_milestone_state("gate_slashed", reward)
 
         # --- Maku Tree sub-event rewards (group 2 interior) ---
-        if active_group == 2 and hasattr(self.env, "_read"):
+        # Suppressed after Gnarled Key obtained to prevent farming.
+        if active_group == 2 and hasattr(self.env, "_read") and not has_gnarled_key_now:
             room_id = info.get("room_id", 0)
 
             # New rooms within group 2
@@ -680,6 +701,27 @@ class RewardWrapper(gym.Wrapper):
                     self._prev_maku_stage, maku_stage, self._maku_stage_bonus,
                 )
             self._prev_maku_stage = maku_stage
+
+        # --- Post-Gnarled-Key: directional guidance + Maku penalty ---
+        if has_gnarled_key_now and not self._post_key_directional_activated:
+            self._post_key_directional_activated = True
+            self._directional_target_row = 10  # Dungeon 1 entrance
+            self._directional_target_col = 4
+            if self._directional_bonus == 0.0:
+                self._directional_bonus = 50.0
+            room_id = info.get("room_id", 0)
+            self._min_target_distance = (
+                abs(room_id // 16 - 10) + abs(room_id % 16 - 4)
+            )
+            logger.info(
+                "POST-KEY: Activated directional bonus (%.1f) toward "
+                "Dungeon 1 (row=10, col=4), current distance=%d",
+                self._directional_bonus, self._min_target_distance,
+            )
+
+        # Per-step penalty for loitering in Maku Tree after getting the key
+        if has_gnarled_key_now and active_group == 2:
+            reward -= 5.0
 
         # --- Sword interaction bonus ---
         if self._sword_use_bonus > 0 and self._current_button == ButtonAction.A:
