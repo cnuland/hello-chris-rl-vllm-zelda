@@ -310,10 +310,20 @@ class PhaseManager:
             old_phase = self._current_phase
             self._current_phase = new_phase
             self._phase_history.append((new_phase, step))
-            logger.info(
-                "PHASE TRANSITION: %s -> %s (step %d)",
-                old_phase, new_phase, step,
-            )
+            # Only log forward transitions or significant changes to avoid
+            # flooding logs when the agent oscillates at group boundaries.
+            phase_order = {p: i for i, p in enumerate(EPISODE_PHASES)}
+            is_forward = phase_order.get(new_phase, 0) > phase_order.get(old_phase, 0)
+            if is_forward:
+                logger.info(
+                    "PHASE TRANSITION: %s -> %s (step %d)",
+                    old_phase, new_phase, step,
+                )
+            else:
+                logger.debug(
+                    "PHASE TRANSITION: %s -> %s (step %d)",
+                    old_phase, new_phase, step,
+                )
             return True
         return False
 
