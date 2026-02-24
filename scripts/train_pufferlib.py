@@ -1039,6 +1039,7 @@ def main():
     dialog_advance = float(os.getenv("DIALOG_ADVANCE", "50"))
     maku_loiter_penalty = float(os.getenv("MAKU_LOITER_PENALTY", "0"))
     snow_region_bonus = float(os.getenv("SNOW_REGION_BONUS", "0"))
+    gate_slash_bonus = float(os.getenv("GATE_SLASH", "0"))
     reward_overrides = {}
     if snow_region_bonus != 0:
         reward_overrides["snow_region"] = snow_region_bonus
@@ -1061,6 +1062,9 @@ def main():
     if dialog_advance != 0:
         reward_overrides["dialog_advance"] = dialog_advance
         logger.info("Dialog advance: %.1f per A-press during dialog (cap 20/episode)", dialog_advance)
+    if gate_slash_bonus != 0:
+        reward_overrides["gate_slash"] = gate_slash_bonus
+        logger.info("Gate slash bonus: %.0f for slashing the Maku Tree gate", gate_slash_bonus)
     # Coverage cap — phase-driven cap on exploration reward to prevent
     # it from drowning out milestone rewards (gate slash, etc.)
     coverage_cap = os.getenv("COVERAGE_CAP")

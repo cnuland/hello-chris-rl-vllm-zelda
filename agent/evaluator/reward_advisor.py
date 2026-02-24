@@ -75,7 +75,7 @@ ABS_CLAMPS: dict[str, tuple[float, float]] = {
     "maku_dialog": (150.0, 1000.0),
     "gnarled_key": (150.0, 1000.0),
     "maku_seed": (300.0, 2000.0),
-    "gate_slash": (75.0, 500.0),
+    "gate_slash": (500.0, 4000.0),
     "maku_room": (30.0, 200.0),
     "maku_stage": (100.0, 600.0),
     "sword": (5.0, 30.0),
