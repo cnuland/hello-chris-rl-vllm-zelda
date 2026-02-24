@@ -728,22 +728,24 @@ class RewardWrapper(gym.Wrapper):
                 )
                 self._capture_milestone_state("gate_slashed", reward)
 
-        # --- Gate proximity shaping (overworld, room 0xD9 only) ---
+        # --- Gate proximity shaping (overworld only) ---
         # Potential-based reward: positive when approaching the gate tile,
         # negative when moving away.  Uses cross-room Manhattan distance
         # so the signal extends beyond room 217 to neighboring rooms.
-        if self._gate_proximity_scale > 0 and not self._gate_slashed:
-            cur_row = qualified_room // 16
-            cur_col = qualified_room % 16
+        if (self._gate_proximity_scale > 0
+                and not self._gate_slashed
+                and active_group == 0):
+            cur_row = room_id // 16
+            cur_col = room_id % 16
             gate_row = MAKU_GATE_ROOM // 16  # 13
             gate_col = MAKU_GATE_ROOM % 16   # 9
 
             # Cross-room distance: room grid distance × 10 tiles + in-room offset
             room_dist_tiles = (abs(cur_row - gate_row) + abs(cur_col - gate_col)) * 10
-            if qualified_room == MAKU_GATE_ROOM:
+            if room_id == MAKU_GATE_ROOM:
                 # Same room: use actual tile distance to gate
-                cur_tile_x = cur_pixel_x // 16
-                cur_tile_y = cur_pixel_y // 16
+                cur_tile_x = info.get("pixel_x", 0) // 16
+                cur_tile_y = info.get("pixel_y", 0) // 16
                 gate_dist = abs(cur_tile_x - self._gate_tile_x) + abs(cur_tile_y - self._gate_tile_y)
             else:
                 # Different room: use room-level distance (coarse)
