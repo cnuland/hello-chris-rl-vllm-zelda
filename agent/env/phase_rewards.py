@@ -78,6 +78,12 @@ class PhaseRewardProfile:
     # per step.  Applied every step the agent is in the specified group.
     loiter_penalties: dict[int, float] = field(default_factory=dict)
 
+    # Grace period (in steps) before loiter penalties start applying.
+    # When the agent enters a penalized area group, the first N steps
+    # are penalty-free.  This teaches "enter, interact, leave quickly"
+    # instead of "never enter at all."
+    loiter_grace_steps: int = 0
+
     # Phase-specific reward parameter overrides (key → value).
     # Applied on top of reward_config when this phase is active.
     param_overrides: dict[str, float] = field(default_factory=dict)
@@ -120,8 +126,14 @@ DEFAULT_PHASE_PROFILES: dict[str, PhaseRewardProfile] = {
         directional_target=(10, 4),
         directional_bonus=50.0,
         directional_scale=1.0,
-        # Penalize loitering in Maku Tree area
-        loiter_penalties={2: 1.0},
+        # Penalize loitering in Maku Tree area — reduced from 1.0 to 0.1
+        # to avoid PPO learning "never enter the Maku Tree."  The penalty
+        # should be low enough that the gnarled_key bonus (500) + maku_tree
+        # visit (100) still dominate a brief visit (~2K steps = -200 penalty).
+        loiter_penalties={2: 0.1},
+        # Grace period: first 3000 steps in group 2 are penalty-free,
+        # giving the agent time to interact with the Maku Tree and exit.
+        loiter_grace_steps=3000,
     ),
     "snow_region": PhaseRewardProfile(
         # Same suppressions as post_key — still heading to dungeon
@@ -130,7 +142,8 @@ DEFAULT_PHASE_PROFILES: dict[str, PhaseRewardProfile] = {
         directional_target=(10, 4),
         directional_bonus=50.0,
         directional_scale=1.0,
-        loiter_penalties={2: 1.0},
+        loiter_penalties={2: 0.1},
+        loiter_grace_steps=3000,
     ),
     "dungeon": PhaseRewardProfile(
         suppressed=["maku_tree_visit", "maku_room", "maku_stage"],
@@ -221,6 +234,7 @@ class PhaseManager:
                 directional_bonus=profile.directional_bonus,
                 directional_scale=profile.directional_scale,
                 loiter_penalties=dict(profile.loiter_penalties),
+                loiter_grace_steps=profile.loiter_grace_steps,
                 param_overrides=dict(profile.param_overrides),
                 area_boost_overrides=dict(profile.area_boost_overrides),
                 coverage_reward_cap=profile.coverage_reward_cap,
@@ -355,6 +369,8 @@ class PhaseManager:
                 int(k): float(v)
                 for k, v in overrides["loiter_penalties"].items()
             }
+        if "loiter_grace_steps" in overrides:
+            profile.loiter_grace_steps = int(overrides["loiter_grace_steps"])
         if "param_overrides" in overrides:
             profile.param_overrides.update(overrides["param_overrides"])
         if "area_boost_overrides" in overrides:

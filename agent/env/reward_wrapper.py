@@ -185,6 +185,12 @@ class RewardWrapper(gym.Wrapper):
         self._gate_tile_y = int(cfg.get("gate_tile_y", 1))
         self._prev_gate_dist: float = 0.0
 
+        # Loiter grace period tracking — counts consecutive steps in each
+        # penalized area group.  The loiter penalty only applies after the
+        # profile's loiter_grace_steps threshold, teaching the agent
+        # "enter, interact, leave quickly" instead of "never enter."
+        self._loiter_steps_in_group: dict[int, int] = {}
+
         # Sword interaction bonus — per-room reward for pressing A near
         # obstacles or in key areas.  Default off (0.0).
         self._sword_use_bonus = cfg.get("sword_use", 0.0)
@@ -438,6 +444,7 @@ class RewardWrapper(gym.Wrapper):
         self._gate_slashed = False
         self._prev_gate_dist = 0.0
         self._entered_snow_region = False
+        self._loiter_steps_in_group.clear()
         self._maku_rooms_visited.clear()
         self._captured_milestones.clear()
         self._a_press_rooms.clear()
@@ -607,6 +614,7 @@ class RewardWrapper(gym.Wrapper):
         # --- Progression rewards ---
         active_group = info.get("active_group", 0)
         dungeon_floor = info.get("dungeon_floor", 0)
+        group_changed = active_group != self._prev_group
 
         # Post-Gnarled-Key reward gating: once the agent has the key,
         # suppress ALL Maku Tree farming rewards so the agent pivots
@@ -785,16 +793,25 @@ class RewardWrapper(gym.Wrapper):
                 )
             self._prev_maku_stage = maku_stage
 
-        # --- Phase-driven loiter penalty ---
+        # --- Phase-driven loiter penalty with grace period ---
         # Replaces hardcoded ``if has_gnarled_key_now and active_group == 2``
-        # with profile-based penalty lookup.  Falls back to env-var-configured
-        # _maku_loiter_penalty for backward compat.
+        # with profile-based penalty lookup.  Grace period allows the agent
+        # to enter, interact, and leave before penalty kicks in.
         phase_loiter = self._phase_manager.get_loiter_penalty(active_group)
         if phase_loiter > 0:
-            reward -= phase_loiter
-        elif has_gnarled_key_now and active_group == 2 and self._maku_loiter_penalty > 0:
+            # Track consecutive steps in this penalized group
+            steps = self._loiter_steps_in_group.get(active_group, 0) + 1
+            self._loiter_steps_in_group[active_group] = steps
+            grace = self._phase_manager.active_profile.loiter_grace_steps
+            if steps > grace:
+                reward -= phase_loiter
+        else:
+            # Reset counter when leaving penalized group
+            if active_group in self._loiter_steps_in_group:
+                del self._loiter_steps_in_group[active_group]
             # Legacy fallback when loiter_penalties not set in profile
-            reward -= self._maku_loiter_penalty
+            if has_gnarled_key_now and active_group == 2 and self._maku_loiter_penalty > 0:
+                reward -= self._maku_loiter_penalty
 
         # --- Snow region milestone (post-Gnarled-Key) ---
         # Massive one-time bonus for reaching the snowy northwest area,
@@ -817,10 +834,12 @@ class RewardWrapper(gym.Wrapper):
                 )
                 self._capture_milestone_state("entered_snow_region", reward)
 
-        # --- Phase re-detection on milestone events ---
-        # When any milestone fires, re-detect the game phase and apply
-        # the new profile's directional target if it changed.
-        if self._milestone_achieved_this_step:
+        # --- Phase re-detection on milestone events OR group transitions ---
+        # Re-detect when any milestone fires OR when the area group changes.
+        # Group transitions must trigger re-detection independently because
+        # suppressed milestones (e.g., maku_tree_visit in post_key) won't
+        # set _milestone_achieved_this_step, leaving the phase stuck.
+        if self._milestone_achieved_this_step or group_changed:
             phase_changed = self._phase_manager.update_phase(
                 sword_level=self._prev_sword,
                 has_gnarled_key=has_gnarled_key_now,

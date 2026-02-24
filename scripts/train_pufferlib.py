@@ -1085,6 +1085,20 @@ def main():
         reward_overrides["phase_overrides"]["pre_maku"] = {"coverage_reward_cap": cap_val}
         reward_overrides["phase_overrides"]["pre_sword"] = {"coverage_reward_cap": cap_val}
         logger.info("Coverage cap: %.0f for pre_maku/pre_sword phases", cap_val)
+    # Wire maku_loiter_penalty into post_key/snow_region phase profiles
+    # so the env var controls the actual phase-driven penalty, not just
+    # the legacy fallback.
+    if maku_loiter_penalty != 0:
+        reward_overrides.setdefault("phase_overrides", {})
+        for phase in ("post_key", "snow_region"):
+            reward_overrides["phase_overrides"].setdefault(phase, {})
+            reward_overrides["phase_overrides"][phase]["loiter_penalties"] = {
+                2: maku_loiter_penalty,
+            }
+        logger.info(
+            "Maku loiter penalty wired into post_key/snow_region profiles: %.2f/step",
+            maku_loiter_penalty,
+        )
 
     # Save env var overrides separately — these are re-applied after each
     # advisor pass to prevent the LLM multiplier from compounding them.
