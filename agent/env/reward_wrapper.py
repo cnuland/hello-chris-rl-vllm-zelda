@@ -197,6 +197,7 @@ class RewardWrapper(gym.Wrapper):
             bonus_per_tile=cfg.get("grid_exploration", 0.1),
             bonus_per_room=cfg.get("new_room", 10.0),
         )
+        self._cumulative_coverage_reward = 0.0
 
         # Potential-based shaping from RLAIF reward model (lambda decays with epoch)
         self._shaping = PotentialShaping(lam=0.01, epoch=epoch) if enable_shaping else None
@@ -373,6 +374,7 @@ class RewardWrapper(gym.Wrapper):
 
         # Reset sub-modules (per-episode)
         self._coverage.reset()
+        self._cumulative_coverage_reward = 0.0
         self._dialog_rooms.clear()
         self._prev_dialog_active = False
         self._dialog_advance_count = 0
@@ -862,7 +864,17 @@ class RewardWrapper(gym.Wrapper):
                     cur_pixel_y,
                 )
                 area_mult = self._area_boost.get(active_group, 1.0)
-                reward += coverage * area_mult
+                coverage_reward = coverage * area_mult
+
+                # Phase-driven coverage cap — prevents exploration reward
+                # from drowning out milestone rewards (gate slash, etc.)
+                cap = self._phase_manager.active_profile.coverage_reward_cap
+                if cap is not None:
+                    remaining = max(0.0, cap - self._cumulative_coverage_reward)
+                    coverage_reward = min(coverage_reward, remaining)
+                self._cumulative_coverage_reward += coverage_reward
+
+                reward += coverage_reward
             # --- Exit-seeking reward (guides agent toward frontier exits) ---
             # Provides a per-step gradient toward room exits that lead to
             # unvisited rooms.  Only fires when the agent actually moves and

@@ -1061,6 +1061,16 @@ def main():
     if dialog_advance != 0:
         reward_overrides["dialog_advance"] = dialog_advance
         logger.info("Dialog advance: %.1f per A-press during dialog (cap 20/episode)", dialog_advance)
+    # Coverage cap — phase-driven cap on exploration reward to prevent
+    # it from drowning out milestone rewards (gate slash, etc.)
+    coverage_cap = os.getenv("COVERAGE_CAP")
+    if coverage_cap is not None:
+        cap_val = float(coverage_cap)
+        reward_overrides.setdefault("phase_overrides", {})
+        reward_overrides["phase_overrides"]["pre_maku"] = {"coverage_reward_cap": cap_val}
+        reward_overrides["phase_overrides"]["pre_sword"] = {"coverage_reward_cap": cap_val}
+        logger.info("Coverage cap: %.0f for pre_maku/pre_sword phases", cap_val)
+
     if reward_overrides:
         reward_config = reward_overrides
 

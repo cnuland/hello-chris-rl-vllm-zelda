@@ -407,6 +407,63 @@ class TestAdvisorOverrides:
         })
         assert manager2._profiles["post_key"].directional_bonus == 50.0
 
+    def test_override_coverage_reward_cap(self):
+        """Advisor can set or clear the coverage reward cap."""
+        manager = PhaseManager()
+        manager.merge_advisor_overrides("pre_maku", {
+            "coverage_reward_cap": 5000.0,
+        })
+        assert manager._profiles["pre_maku"].coverage_reward_cap == 5000.0
+
+    def test_override_coverage_reward_cap_to_none(self):
+        """Advisor can remove the cap by setting it to None."""
+        manager = PhaseManager()
+        assert manager._profiles["pre_maku"].coverage_reward_cap == 2000.0
+        manager.merge_advisor_overrides("pre_maku", {
+            "coverage_reward_cap": None,
+        })
+        assert manager._profiles["pre_maku"].coverage_reward_cap is None
+
+
+# ---------------------------------------------------------------------------
+# Coverage reward cap
+# ---------------------------------------------------------------------------
+
+class TestCoverageRewardCap:
+    """Verify coverage_reward_cap field and profile configuration."""
+
+    def test_default_cap_is_none(self):
+        """Default PhaseRewardProfile has no cap (unlimited)."""
+        profile = PhaseRewardProfile()
+        assert profile.coverage_reward_cap is None
+
+    def test_pre_maku_has_cap(self):
+        profile = DEFAULT_PHASE_PROFILES["pre_maku"]
+        assert profile.coverage_reward_cap == 2000.0
+
+    def test_pre_sword_has_cap(self):
+        profile = DEFAULT_PHASE_PROFILES["pre_sword"]
+        assert profile.coverage_reward_cap == 2000.0
+
+    def test_post_key_no_cap(self):
+        """After Gnarled Key, exploration should be unlimited."""
+        profile = DEFAULT_PHASE_PROFILES["post_key"]
+        assert profile.coverage_reward_cap is None
+
+    def test_maku_interaction_no_cap(self):
+        profile = DEFAULT_PHASE_PROFILES["maku_interaction"]
+        assert profile.coverage_reward_cap is None
+
+    def test_dungeon_no_cap(self):
+        profile = DEFAULT_PHASE_PROFILES["dungeon"]
+        assert profile.coverage_reward_cap is None
+
+    def test_cap_preserved_in_deep_copy(self):
+        """PhaseManager deep-copies cap values from default profiles."""
+        manager = PhaseManager()
+        assert manager._profiles["pre_maku"].coverage_reward_cap == 2000.0
+        assert manager._profiles["post_key"].coverage_reward_cap is None
+
 
 # ---------------------------------------------------------------------------
 # EPISODE_PHASES ordering

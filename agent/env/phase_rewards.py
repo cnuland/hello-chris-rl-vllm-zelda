@@ -85,6 +85,10 @@ class PhaseRewardProfile:
     # Area boost overrides (active_group → multiplier).
     area_boost_overrides: dict[int, float] = field(default_factory=dict)
 
+    # Maximum cumulative coverage reward per episode in this phase.
+    # None = unlimited (default, backward compatible).
+    coverage_reward_cap: float | None = None
+
 
 # ---------------------------------------------------------------------------
 # Default profiles — encode the same behavior as the hardcoded checks
@@ -95,10 +99,12 @@ DEFAULT_PHASE_PROFILES: dict[str, PhaseRewardProfile] = {
     "pre_sword": PhaseRewardProfile(
         directional_target=(14, 8),  # Hero's Cave area (south of village)
         dialog_advance_groups=frozenset({2, 3}),
+        coverage_reward_cap=2000.0,  # Cap exploration so milestone rewards dominate
     ),
     "pre_maku": PhaseRewardProfile(
         directional_target=(5, 12),  # Maku Tree path (northeast)
         dialog_advance_groups=frozenset({2, 3}),
+        coverage_reward_cap=2000.0,  # Cap exploration so gate slash reward is visible
     ),
     "maku_interaction": PhaseRewardProfile(
         directional_target=(5, 12),  # Stay near Maku Tree
@@ -217,6 +223,7 @@ class PhaseManager:
                 loiter_penalties=dict(profile.loiter_penalties),
                 param_overrides=dict(profile.param_overrides),
                 area_boost_overrides=dict(profile.area_boost_overrides),
+                coverage_reward_cap=profile.coverage_reward_cap,
             )
         self._current_phase: str = "pre_sword"
         self._phase_history: list[tuple[str, int]] = []
@@ -355,6 +362,9 @@ class PhaseManager:
                 int(k): float(v)
                 for k, v in overrides["area_boost_overrides"].items()
             }
+        if "coverage_reward_cap" in overrides:
+            val = overrides["coverage_reward_cap"]
+            profile.coverage_reward_cap = float(val) if val is not None else None
 
         logger.info(
             "Applied advisor overrides to phase '%s': %s",
