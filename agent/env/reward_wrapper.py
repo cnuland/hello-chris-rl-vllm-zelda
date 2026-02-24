@@ -175,6 +175,16 @@ class RewardWrapper(gym.Wrapper):
         self._directives = cfg.get("directives", [])
         self._triggered_directives: set[str] = set()
 
+        # Gate proximity shaping — potential-based reward that guides the
+        # agent toward the Maku Tree gate tile in room 0xD9 (217).
+        # Reward = scale × (prev_dist - cur_dist), positive when approaching.
+        # This bridges the sparse reward gap: instead of needing to randomly
+        # discover gate slashing, the agent gets a continuous gradient signal.
+        self._gate_proximity_scale = cfg.get("gate_proximity", 0.0)
+        self._gate_tile_x = int(cfg.get("gate_tile_x", 5))
+        self._gate_tile_y = int(cfg.get("gate_tile_y", 1))
+        self._prev_gate_dist: float = 0.0
+
         # Sword interaction bonus — per-room reward for pressing A near
         # obstacles or in key areas.  Default off (0.0).
         self._sword_use_bonus = cfg.get("sword_use", 0.0)
@@ -426,6 +436,7 @@ class RewardWrapper(gym.Wrapper):
         self._baseline_maku_stage = self._prev_maku_stage
         self._baseline_group = self._prev_group
         self._gate_slashed = False
+        self._prev_gate_dist = 0.0
         self._entered_snow_region = False
         self._maku_rooms_visited.clear()
         self._captured_milestones.clear()
@@ -716,6 +727,32 @@ class RewardWrapper(gym.Wrapper):
                     gate_flags, self._gate_slash_bonus,
                 )
                 self._capture_milestone_state("gate_slashed", reward)
+
+        # --- Gate proximity shaping (overworld, room 0xD9 only) ---
+        # Potential-based reward: positive when approaching the gate tile,
+        # negative when moving away.  Uses cross-room Manhattan distance
+        # so the signal extends beyond room 217 to neighboring rooms.
+        if self._gate_proximity_scale > 0 and not self._gate_slashed:
+            cur_row = qualified_room // 16
+            cur_col = qualified_room % 16
+            gate_row = MAKU_GATE_ROOM // 16  # 13
+            gate_col = MAKU_GATE_ROOM % 16   # 9
+
+            # Cross-room distance: room grid distance × 10 tiles + in-room offset
+            room_dist_tiles = (abs(cur_row - gate_row) + abs(cur_col - gate_col)) * 10
+            if qualified_room == MAKU_GATE_ROOM:
+                # Same room: use actual tile distance to gate
+                cur_tile_x = cur_pixel_x // 16
+                cur_tile_y = cur_pixel_y // 16
+                gate_dist = abs(cur_tile_x - self._gate_tile_x) + abs(cur_tile_y - self._gate_tile_y)
+            else:
+                # Different room: use room-level distance (coarse)
+                gate_dist = float(room_dist_tiles)
+
+            if self._prev_gate_dist > 0:
+                delta = self._prev_gate_dist - gate_dist
+                reward += self._gate_proximity_scale * delta
+            self._prev_gate_dist = gate_dist
 
         # --- Maku Tree sub-event rewards (group 2 interior) ---
         # Phase-driven suppression replaces hardcoded has_gnarled_key_now check.

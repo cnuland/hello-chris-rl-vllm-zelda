@@ -1040,6 +1040,9 @@ def main():
     maku_loiter_penalty = float(os.getenv("MAKU_LOITER_PENALTY", "0"))
     snow_region_bonus = float(os.getenv("SNOW_REGION_BONUS", "0"))
     gate_slash_bonus = float(os.getenv("GATE_SLASH", "0"))
+    gate_proximity = float(os.getenv("GATE_PROXIMITY", "0"))
+    gate_tile_x = int(os.getenv("GATE_TILE_X", "5"))
+    gate_tile_y = int(os.getenv("GATE_TILE_Y", "1"))
     reward_overrides = {}
     if snow_region_bonus != 0:
         reward_overrides["snow_region"] = snow_region_bonus
@@ -1065,6 +1068,14 @@ def main():
     if gate_slash_bonus != 0:
         reward_overrides["gate_slash"] = gate_slash_bonus
         logger.info("Gate slash bonus: %.0f for slashing the Maku Tree gate", gate_slash_bonus)
+    if gate_proximity != 0:
+        reward_overrides["gate_proximity"] = gate_proximity
+        reward_overrides["gate_tile_x"] = gate_tile_x
+        reward_overrides["gate_tile_y"] = gate_tile_y
+        logger.info(
+            "Gate proximity shaping: %.1f scale, target tile (%d, %d) in room 0xD9",
+            gate_proximity, gate_tile_x, gate_tile_y,
+        )
     # Coverage cap — phase-driven cap on exploration reward to prevent
     # it from drowning out milestone rewards (gate slash, etc.)
     coverage_cap = os.getenv("COVERAGE_CAP")
@@ -1074,6 +1085,15 @@ def main():
         reward_overrides["phase_overrides"]["pre_maku"] = {"coverage_reward_cap": cap_val}
         reward_overrides["phase_overrides"]["pre_sword"] = {"coverage_reward_cap": cap_val}
         logger.info("Coverage cap: %.0f for pre_maku/pre_sword phases", cap_val)
+
+    # Save env var overrides separately — these are re-applied after each
+    # advisor pass to prevent the LLM multiplier from compounding them.
+    env_var_pins: dict[str, float] = {}
+    for key in ("new_room", "grid_exploration", "exit_seeking",
+                "directional_bonus", "dialog_advance", "gate_slash",
+                "gate_proximity", "snow_region", "maku_loiter_penalty"):
+        if key in reward_overrides:
+            env_var_pins[key] = reward_overrides[key]
 
     if reward_overrides:
         reward_config = reward_overrides
@@ -1197,6 +1217,17 @@ def main():
             )
             if advised_config:
                 reward_config = advised_config
+                # Re-apply env var overrides — these are "pinned" and must
+                # always take precedence over LLM advisor multipliers.
+                # Without this, the advisor compounds multipliers each epoch
+                # (e.g., new_room: 20 → 30 → 45 → 67 → 100).
+                if env_var_pins:
+                    for pin_key, pin_val in env_var_pins.items():
+                        reward_config[pin_key] = pin_val
+                    logger.info(
+                        "Re-applied env var pins: %s",
+                        {k: f"{v:.2f}" for k, v in env_var_pins.items()},
+                    )
                 logger.info("Next epoch uses LLM-adjusted reward config")
 
         # Phase 3: Curriculum episode length adjustment
