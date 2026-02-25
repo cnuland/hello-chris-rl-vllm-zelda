@@ -223,6 +223,11 @@ class RewardWrapper(gym.Wrapper):
         if self._global_coverage_cap is not None:
             self._global_coverage_cap = float(self._global_coverage_cap)
 
+        # Per-episode reward breakdown tracking (for debugging high rewards)
+        self._reward_breakdown: dict[str, float] = {}
+        self._episode_total_reward = 0.0
+        self._logged_breakdown = False
+
         # Potential-based shaping from RLAIF reward model (lambda decays with epoch)
         self._shaping = PotentialShaping(lam=0.01, epoch=epoch) if enable_shaping else None
         self._reward_model = None
@@ -453,6 +458,7 @@ class RewardWrapper(gym.Wrapper):
         self._prev_gate_dist = 0.0
         self._entered_snow_region = False
         self._loiter_steps_in_group.clear()
+        self._episode_total_reward = 0.0
         self._maku_rooms_visited.clear()
         self._captured_milestones.clear()
         self._a_press_rooms.clear()
@@ -522,9 +528,27 @@ class RewardWrapper(gym.Wrapper):
                 screen_array=screen,
             )
 
+        # Track cumulative reward for breakdown logging
+        self._episode_total_reward += reward
+
         # Flush on episode end
         if (terminated or truncated) and self._exporter:
             self._exporter.end_episode()
+
+        # Log reward breakdown once per epoch for debugging
+        if (terminated or truncated) and not self._logged_breakdown:
+            self._logged_breakdown = True
+            logger.info(
+                "REWARD BREAKDOWN: total=%.1f, coverage=%.1f (cap=%s, global_cap=%s), "
+                "tiles=%d, rooms=%d, phase=%s",
+                self._episode_total_reward,
+                self._cumulative_coverage_reward,
+                self._phase_manager.active_profile.coverage_reward_cap,
+                self._global_coverage_cap,
+                self._coverage.total_tiles,
+                self._coverage.unique_rooms,
+                self._phase_manager.current_phase,
+            )
 
         # Update milestones
         self._milestone_max_rooms = max(self._milestone_max_rooms, new_rooms)
