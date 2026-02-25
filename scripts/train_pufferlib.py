@@ -1076,15 +1076,19 @@ def main():
             "Gate proximity shaping: %.1f scale, target tile (%d, %d) in room 0xD9",
             gate_proximity, gate_tile_x, gate_tile_y,
         )
-    # Coverage cap — phase-driven cap on exploration reward to prevent
-    # it from drowning out milestone rewards (gate slash, etc.)
+    # Coverage cap — hard ceiling on per-episode exploration reward.
+    # Applied globally (all phases) to prevent the agent from exploiting
+    # uncapped phases (e.g., maku_interaction with 3× area boost).
     coverage_cap = os.getenv("COVERAGE_CAP")
     if coverage_cap is not None:
         cap_val = float(coverage_cap)
+        # Global cap applies regardless of phase
+        reward_overrides["global_coverage_cap"] = cap_val
+        # Also set per-phase caps for pre_maku/pre_sword (backward compat)
         reward_overrides.setdefault("phase_overrides", {})
         reward_overrides["phase_overrides"]["pre_maku"] = {"coverage_reward_cap": cap_val}
         reward_overrides["phase_overrides"]["pre_sword"] = {"coverage_reward_cap": cap_val}
-        logger.info("Coverage cap: %.0f for pre_maku/pre_sword phases", cap_val)
+        logger.info("Coverage cap: %.0f (global + pre_maku/pre_sword phases)", cap_val)
     # Wire maku_loiter_penalty into post_key/snow_region phase profiles
     # so the env var controls the actual phase-driven penalty, not just
     # the legacy fallback.

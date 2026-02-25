@@ -215,6 +215,14 @@ class RewardWrapper(gym.Wrapper):
         )
         self._cumulative_coverage_reward = 0.0
 
+        # Global coverage cap — hard ceiling on per-episode exploration
+        # reward that applies REGARDLESS of phase.  Prevents the agent
+        # from exploiting uncapped phases (e.g., maku_interaction with 3×
+        # area boost) to farm exploration instead of completing milestones.
+        self._global_coverage_cap: float | None = cfg.get("global_coverage_cap", None)
+        if self._global_coverage_cap is not None:
+            self._global_coverage_cap = float(self._global_coverage_cap)
+
         # Potential-based shaping from RLAIF reward model (lambda decays with epoch)
         self._shaping = PotentialShaping(lam=0.01, epoch=epoch) if enable_shaping else None
         self._reward_model = None
@@ -924,11 +932,19 @@ class RewardWrapper(gym.Wrapper):
                 area_mult = self._area_boost.get(active_group, 1.0)
                 coverage_reward = coverage * area_mult
 
-                # Phase-driven coverage cap — prevents exploration reward
-                # from drowning out milestone rewards (gate slash, etc.)
-                cap = self._phase_manager.active_profile.coverage_reward_cap
-                if cap is not None:
-                    remaining = max(0.0, cap - self._cumulative_coverage_reward)
+                # Coverage cap — prevents exploration reward from drowning
+                # out milestone rewards.  Uses the MORE restrictive of:
+                # (a) phase-specific cap (if set), (b) global cap (if set).
+                phase_cap = self._phase_manager.active_profile.coverage_reward_cap
+                effective_cap = None
+                if phase_cap is not None and self._global_coverage_cap is not None:
+                    effective_cap = min(phase_cap, self._global_coverage_cap)
+                elif phase_cap is not None:
+                    effective_cap = phase_cap
+                elif self._global_coverage_cap is not None:
+                    effective_cap = self._global_coverage_cap
+                if effective_cap is not None:
+                    remaining = max(0.0, effective_cap - self._cumulative_coverage_reward)
                     coverage_reward = min(coverage_reward, remaining)
                 self._cumulative_coverage_reward += coverage_reward
 
