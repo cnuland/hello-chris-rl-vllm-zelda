@@ -459,6 +459,7 @@ class RewardWrapper(gym.Wrapper):
         self._entered_snow_region = False
         self._loiter_steps_in_group.clear()
         self._episode_total_reward = 0.0
+        self._logged_breakdown = False
         self._maku_rooms_visited.clear()
         self._captured_milestones.clear()
         self._a_press_rooms.clear()
@@ -535,12 +536,14 @@ class RewardWrapper(gym.Wrapper):
         if (terminated or truncated) and self._exporter:
             self._exporter.end_episode()
 
-        # Log reward breakdown once per epoch for debugging
+        # Log reward breakdown for every episode (reset flag in reset())
         if (terminated or truncated) and not self._logged_breakdown:
             self._logged_breakdown = True
+            n_transitions = len(self._phase_manager.phase_history) - 1
             logger.info(
                 "REWARD BREAKDOWN: total=%.1f, coverage=%.1f (cap=%s, global_cap=%s), "
-                "tiles=%d, rooms=%d, phase=%s",
+                "tiles=%d, rooms=%d, phase=%s, transitions=%d, "
+                "gate=%d, key=%d, dialog=%d",
                 self._episode_total_reward,
                 self._cumulative_coverage_reward,
                 self._phase_manager.active_profile.coverage_reward_cap,
@@ -548,6 +551,10 @@ class RewardWrapper(gym.Wrapper):
                 self._coverage.total_tiles,
                 self._coverage.unique_rooms,
                 self._phase_manager.current_phase,
+                n_transitions,
+                int(self._gate_slashed),
+                int(self._prev_gnarled_key),
+                self._dialog_advance_count,
             )
 
         # Update milestones
@@ -884,16 +891,26 @@ class RewardWrapper(gym.Wrapper):
             if phase_changed:
                 profile = self._phase_manager.active_profile
                 if profile.directional_target is not None:
-                    self._directional_target_row = profile.directional_target[0]
-                    self._directional_target_col = profile.directional_target[1]
+                    new_row, new_col = profile.directional_target
+                    target_changed = (
+                        new_row != self._directional_target_row
+                        or new_col != self._directional_target_col
+                    )
+                    self._directional_target_row = new_row
+                    self._directional_target_col = new_col
                     if profile.directional_bonus > 0 and self._directional_bonus == 0.0:
                         self._directional_bonus = profile.directional_bonus
-                    # Reset min distance for new target
-                    room_id = info.get("room_id", 0)
-                    self._min_target_distance = (
-                        abs(room_id // 16 - self._directional_target_row)
-                        + abs(room_id % 16 - self._directional_target_col)
-                    )
+                    # Only reset min distance when the TARGET actually changes
+                    # (e.g., pre_maku→post_key switches from Maku Tree to Dungeon 1).
+                    # Don't reset on same-target phase oscillations (pre_maku ↔
+                    # maku_interaction both target 5,12) — that allows farming
+                    # directional reward by crossing group boundaries repeatedly.
+                    if target_changed:
+                        room_id = info.get("room_id", 0)
+                        self._min_target_distance = (
+                            abs(room_id // 16 - self._directional_target_row)
+                            + abs(room_id % 16 - self._directional_target_col)
+                        )
 
         # --- Sword interaction bonus ---
         if self._sword_use_bonus > 0 and self._current_button == ButtonAction.A:

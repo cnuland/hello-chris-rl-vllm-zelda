@@ -241,6 +241,7 @@ class PhaseManager:
             )
         self._current_phase: str = "pre_sword"
         self._phase_history: list[tuple[str, int]] = []
+        self._logged_transitions: set[tuple[str, str]] = set()
 
     @property
     def current_phase(self) -> str:
@@ -280,6 +281,7 @@ class PhaseManager:
             baseline_gnarled_key=baseline_gnarled_key,
         )
         self._phase_history = [(self._current_phase, 0)]
+        self._logged_transitions.clear()
         return self._current_phase
 
     def update_phase(
@@ -310,20 +312,25 @@ class PhaseManager:
             old_phase = self._current_phase
             self._current_phase = new_phase
             self._phase_history.append((new_phase, step))
-            # Only log forward transitions or significant changes to avoid
-            # flooding logs when the agent oscillates at group boundaries.
-            phase_order = {p: i for i, p in enumerate(EPISODE_PHASES)}
-            is_forward = phase_order.get(new_phase, 0) > phase_order.get(old_phase, 0)
-            if is_forward:
-                logger.info(
-                    "PHASE TRANSITION: %s -> %s (step %d)",
-                    old_phase, new_phase, step,
-                )
-            else:
-                logger.debug(
-                    "PHASE TRANSITION: %s -> %s (step %d)",
-                    old_phase, new_phase, step,
-                )
+            # Rate-limit logging: only log each unique transition pair once
+            # per episode.  At group 0/2 boundaries, the agent can oscillate
+            # pre_maku ↔ maku_interaction thousands of times.  We log the
+            # FIRST occurrence of each transition and suppress repeats.
+            transition_key = (old_phase, new_phase)
+            if transition_key not in self._logged_transitions:
+                self._logged_transitions.add(transition_key)
+                phase_order = {p: i for i, p in enumerate(EPISODE_PHASES)}
+                is_forward = phase_order.get(new_phase, 0) > phase_order.get(old_phase, 0)
+                if is_forward:
+                    logger.info(
+                        "PHASE TRANSITION: %s -> %s (step %d)",
+                        old_phase, new_phase, step,
+                    )
+                else:
+                    logger.debug(
+                        "PHASE TRANSITION: %s -> %s (step %d)",
+                        old_phase, new_phase, step,
+                    )
             return True
         return False
 
