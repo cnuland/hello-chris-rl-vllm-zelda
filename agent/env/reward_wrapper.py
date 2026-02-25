@@ -230,6 +230,18 @@ class RewardWrapper(gym.Wrapper):
         self._episode_total_reward = 0.0
         self._logged_breakdown = False
 
+        # Per-component reward accumulators for diagnostic breakdown.
+        # These track every reward source so REWARD BREAKDOWN can verify
+        # that total == sum(components), eliminating "mystery reward" gaps.
+        self._acc_exit_seeking = 0.0
+        self._acc_directional = 0.0
+        self._acc_indoor_entry = 0.0
+        self._acc_dialog = 0.0  # dialog_bonus + dialog_advance + dialog_state
+        self._acc_milestones = 0.0  # gate, key, maku, sword, dungeon, snow
+        self._acc_health = 0.0
+        self._acc_loiter = 0.0
+        self._acc_proximity = 0.0
+
         # Potential-based shaping from RLAIF reward model (lambda decays with epoch)
         self._shaping = PotentialShaping(lam=0.01, epoch=epoch) if enable_shaping else None
         self._reward_model = None
@@ -466,6 +478,14 @@ class RewardWrapper(gym.Wrapper):
         self._loiter_steps_in_group.clear()
         self._episode_total_reward = 0.0
         self._logged_breakdown = False
+        self._acc_exit_seeking = 0.0
+        self._acc_directional = 0.0
+        self._acc_indoor_entry = 0.0
+        self._acc_dialog = 0.0
+        self._acc_milestones = 0.0
+        self._acc_health = 0.0
+        self._acc_loiter = 0.0
+        self._acc_proximity = 0.0
         self._maku_rooms_visited.clear()
         self._captured_milestones.clear()
         self._a_press_rooms.clear()
@@ -546,10 +566,25 @@ class RewardWrapper(gym.Wrapper):
         if (terminated or truncated) and not self._logged_breakdown:
             self._logged_breakdown = True
             n_transitions = len(self._phase_manager.phase_history) - 1
+            # Compute unaccounted reward (should be ~0 if all sources tracked)
+            tracked_sum = (
+                self._cumulative_coverage_reward
+                + self._acc_exit_seeking
+                + self._acc_directional
+                + self._acc_indoor_entry
+                + self._acc_dialog
+                + self._acc_health
+                + self._acc_loiter
+                + self._acc_proximity
+            )
+            unaccounted = self._episode_total_reward - tracked_sum
             logger.info(
                 "REWARD BREAKDOWN: total=%.1f, coverage=%.1f (cap=%s, global_cap=%s), "
                 "tiles=%d, rooms=%d, phase=%s, transitions=%d, "
-                "gate=%d, key=%d, dialog=%d",
+                "gate=%d, key=%d, dialog=%d | "
+                "exit_seek=%.1f, directional=%.1f, indoor=%.1f, "
+                "dlg=%.1f, health=%.1f, loiter=%.1f, prox=%.1f, "
+                "UNACCOUNTED=%.1f",
                 self._episode_total_reward,
                 self._cumulative_coverage_reward,
                 self._phase_manager.active_profile.coverage_reward_cap,
@@ -561,6 +596,14 @@ class RewardWrapper(gym.Wrapper):
                 int(self._gate_slashed),
                 int(self._prev_gnarled_key),
                 self._dialog_advance_count,
+                self._acc_exit_seeking,
+                self._acc_directional,
+                self._acc_indoor_entry,
+                self._acc_dialog,
+                self._acc_health,
+                self._acc_loiter,
+                self._acc_proximity,
+                unaccounted,
             )
 
         # Update milestones
@@ -627,7 +670,9 @@ class RewardWrapper(gym.Wrapper):
         health = info.get("health", 0)
         health_delta = health - self._prev_health
         if health_delta < 0:
-            reward += health_delta * abs(self._health_loss_scale)
+            h_rew = health_delta * abs(self._health_loss_scale)
+            reward += h_rew
+            self._acc_health += h_rew
         self._prev_health = health
 
         # Death
@@ -692,6 +737,7 @@ class RewardWrapper(gym.Wrapper):
         # Indoor area bonus
         if active_group == 3 and self._prev_group != 3:
             reward += self._indoor_entry_bonus
+            self._acc_indoor_entry += self._indoor_entry_bonus
 
         # Dungeon floor change bonus
         if dungeon_floor != self._prev_dungeon_floor and active_group in (4, 5):
@@ -706,6 +752,7 @@ class RewardWrapper(gym.Wrapper):
         if dialog_active and not self._prev_dialog_active:
             if room_id not in self._dialog_rooms:
                 reward += self._dialog_bonus
+                self._acc_dialog += self._dialog_bonus
                 self._dialog_rooms.add(room_id)
         self._prev_dialog_active = dialog_active
 
@@ -724,6 +771,7 @@ class RewardWrapper(gym.Wrapper):
                 # Reward A-presses during dialog — directly teaches "press A to advance text"
                 if self._current_button == ButtonAction.A:
                     reward += self._dialog_advance_bonus
+                    self._acc_dialog += self._dialog_advance_bonus
                     self._dialog_advance_count += 1
                     logger.info(
                         "DIALOG ADVANCE: A-press in group=%d room=%d count=%d/%d (+%.0f)",
@@ -734,7 +782,9 @@ class RewardWrapper(gym.Wrapper):
                 elif (dialog_value != self._prev_dialog_value
                       and self._prev_dialog_value != 0
                       and dialog_value != 0):
-                    reward += self._dialog_advance_bonus * 0.5
+                    ds_rew = self._dialog_advance_bonus * 0.5
+                    reward += ds_rew
+                    self._acc_dialog += ds_rew
                     self._dialog_advance_count += 1
                     logger.info(
                         "DIALOG STATE CHANGE: group=%d 0x%02X → 0x%02X room=%d (+%.0f)",
@@ -812,7 +862,9 @@ class RewardWrapper(gym.Wrapper):
 
             if self._prev_gate_dist > 0:
                 delta = self._prev_gate_dist - gate_dist
-                reward += self._gate_proximity_scale * delta
+                prox_rew = self._gate_proximity_scale * delta
+                reward += prox_rew
+                self._acc_proximity += prox_rew
             self._prev_gate_dist = gate_dist
 
         # --- Maku Tree sub-event rewards (group 2 interior) ---
@@ -856,6 +908,7 @@ class RewardWrapper(gym.Wrapper):
             grace = self._phase_manager.active_profile.loiter_grace_steps
             if steps > grace:
                 reward -= phase_loiter
+                self._acc_loiter -= phase_loiter
         else:
             # Reset counter when leaving penalized group
             if active_group in self._loiter_steps_in_group:
@@ -863,6 +916,7 @@ class RewardWrapper(gym.Wrapper):
             # Legacy fallback when loiter_penalties not set in profile
             if has_gnarled_key_now and active_group == 2 and self._maku_loiter_penalty > 0:
                 reward -= self._maku_loiter_penalty
+                self._acc_loiter -= self._maku_loiter_penalty
 
         # --- Snow region milestone (post-Gnarled-Key) ---
         # Massive one-time bonus for reaching the snowy northwest area,
@@ -1014,7 +1068,9 @@ class RewardWrapper(gym.Wrapper):
                 if (self._prev_room_for_exit == cur_room
                         and self._prev_frontier_dist > 0):
                     dist_delta = self._prev_frontier_dist - cur_frontier_dist
-                    reward += dist_delta * self._exit_seeking_scale
+                    es_rew = dist_delta * self._exit_seeking_scale
+                    reward += es_rew
+                    self._acc_exit_seeking += es_rew
                 self._prev_frontier_dist = cur_frontier_dist
                 self._prev_room_for_exit = cur_room
 
@@ -1031,7 +1087,9 @@ class RewardWrapper(gym.Wrapper):
                           abs(cur_col - self._directional_target_col))
             if target_dist < self._min_target_distance:
                 delta = self._min_target_distance - target_dist
-                reward += delta * self._directional_bonus * self._directional_target_scale
+                dir_rew = delta * self._directional_bonus * self._directional_target_scale
+                reward += dir_rew
+                self._acc_directional += dir_rew
                 self._min_target_distance = target_dist
 
         # --- Potential-based shaping ---
