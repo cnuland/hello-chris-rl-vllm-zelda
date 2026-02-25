@@ -77,6 +77,8 @@ class RewardWrapper(gym.Wrapper):
         # Progression reward scales
         self._dungeon_entry_bonus = cfg.get("dungeon_entry", 100.0)
         self._maku_tree_visit_bonus = cfg.get("maku_tree_visit", 100.0)
+        self._rewarded_maku_visit = False  # One-time per episode
+        self._rewarded_dungeon_entry = False  # One-time per episode
         self._indoor_entry_bonus = cfg.get("indoor_entry", 5.0)
         self._dungeon_floor_bonus = cfg.get("dungeon_floor", 10.0)
 
@@ -248,6 +250,8 @@ class RewardWrapper(gym.Wrapper):
         self._milestone_got_sword = False
         self._milestone_entered_dungeon = False
         self._milestone_visited_maku_tree = False
+        self._rewarded_maku_visit = False
+        self._rewarded_dungeon_entry = False
         self._milestone_entered_snow_region = False
         self._milestone_essences = 0
         self._milestone_dungeon_keys = 0
@@ -443,6 +447,8 @@ class RewardWrapper(gym.Wrapper):
         self._milestone_got_sword = False
         self._milestone_entered_dungeon = False
         self._milestone_visited_maku_tree = False
+        self._rewarded_maku_visit = False
+        self._rewarded_dungeon_entry = False
         self._milestone_entered_snow_region = False
         self._milestone_essences = 0
         self._milestone_dungeon_keys = 0
@@ -664,15 +670,21 @@ class RewardWrapper(gym.Wrapper):
                 self.env._read(GNARLED_KEY_OBTAINED) & GNARLED_KEY_OBTAINED_MASK
             )
 
-        # Dungeon entry bonus
-        if active_group in (4, 5) and self._prev_group not in (4, 5):
+        # Dungeon entry bonus — ONE-TIME per episode
+        if (active_group in (4, 5) and self._prev_group not in (4, 5)
+                and not self._rewarded_dungeon_entry):
+            self._rewarded_dungeon_entry = True
             reward += self._dungeon_entry_bonus
             self._milestone_achieved_this_step = True
             self._capture_milestone_state("entered_dungeon", reward)
 
-        # Maku Tree visit bonus — suppressed in post-key phases
+        # Maku Tree visit bonus — ONE-TIME per episode, suppressed in post-key phases.
+        # Previously fired on every group transition into group 2, allowing
+        # farming by oscillating between overworld (0) and Maku Tree (2).
         if (active_group == 2 and self._prev_group != 2
+                and not self._rewarded_maku_visit
                 and not self._phase_manager.is_reward_suppressed("maku_tree_visit")):
+            self._rewarded_maku_visit = True
             reward += self._maku_tree_visit_bonus
             self._milestone_achieved_this_step = True
             self._capture_milestone_state("visited_maku_tree", reward)
