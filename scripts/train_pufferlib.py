@@ -349,6 +349,10 @@ def run_training_epoch(
     clip_coef: float = 0.2,
     vf_coef: float = 0.5,
     max_grad_norm: float = 0.5,
+    prio_alpha: float = 0.0,
+    prio_beta0: float = 0.2,
+    vf_clip_coef: float = 0.2,
+    max_epochs: int = 48,
 ) -> tuple[str, float, dict]:
     """Run one epoch of CleanRL-style PPO training with PufferLib envs.
 
@@ -429,6 +433,14 @@ def run_training_epoch(
         num_steps, batch_size, minibatch_size, num_iterations,
         update_epochs, gamma, gae_lambda, clip_coef,
     )
+    use_per = prio_alpha > 0
+    if use_per:
+        logger.info(
+            "PER enabled: alpha=%.2f, beta0=%.2f, vf_clip=%.2f",
+            prio_alpha, prio_beta0, vf_clip_coef,
+        )
+    else:
+        logger.info("PER disabled (prio_alpha=0), vf_clip=%.2f", vf_clip_coef)
 
     # Rollout storage (on device)
     # MultiDiscrete: actions have shape (num_envs, 2) per step
@@ -667,6 +679,19 @@ def run_training_epoch(
         b_returns = returns.reshape(-1)
         b_values = values_buf.reshape(-1)
 
+        # Prioritized Experience Replay (PER) — sample transitions
+        # proportional to |advantage|^alpha.  High-advantage transitions
+        # (e.g. gate slashes with advantage ≈ 1900) get sampled ~20x more
+        # often than typical coverage transitions (advantage ≈ 5).
+        # Matches PufferLib's pufferl.py implementation.
+        if use_per:
+            b_adv_abs = b_advantages.abs()
+            prio_weights = torch.nan_to_num(b_adv_abs ** prio_alpha, 0, 0, 0)
+            prio_probs = (prio_weights + 1e-6) / (prio_weights.sum() + 1e-6)
+            # Beta anneals from beta0 toward 1.0 over training, reducing
+            # importance sampling bias as the policy converges.
+            anneal_beta = prio_beta0 + (1 - prio_beta0) * prio_alpha * epoch / max(max_epochs, 1)
+
         total_pg_loss = 0.0
         total_v_loss = 0.0
         total_entropy = 0.0
@@ -674,68 +699,153 @@ def run_training_epoch(
         total_movement_entropy = 0.0
         total_approx_kl = 0.0
         num_updates = 0
+        num_minibatches = max(1, batch_size // minibatch_size)
 
         for _update_epoch in range(update_epochs):
-            indices = torch.randperm(batch_size, device=device)
-            for start in range(0, batch_size, minibatch_size):
-                end = start + minibatch_size
-                mb_idx = indices[start:end]
+            if use_per:
+                # PER: sample minibatches with replacement, weighted by
+                # advantage magnitude.  Each minibatch iteration draws
+                # minibatch_size samples from the full batch.
+                for _mb in range(num_minibatches):
+                    mb_idx = torch.multinomial(
+                        prio_probs, minibatch_size, replacement=True,
+                    )
+                    # Importance sampling correction — compensates for the
+                    # biased sampling so gradients remain unbiased.
+                    mb_is_weight = (batch_size * prio_probs[mb_idx]) ** (-anneal_beta)
+                    mb_is_weight = mb_is_weight / mb_is_weight.max()
 
-                new_logits_list, new_value = policy(b_obs[mb_idx])
-                # MultiDiscrete: reconstruct per-dimension distributions
-                new_dists = [
-                    torch.distributions.Categorical(logits=lg)
-                    for lg in new_logits_list
-                ]
-                mb_acts = b_actions[mb_idx]  # (mb, 2)
-                new_logprob = sum(
-                    d.log_prob(mb_acts[:, i])
-                    for i, d in enumerate(new_dists)
-                )
-                # Separate entropy for movement and button heads
-                movement_entropy = new_dists[0].entropy()
-                button_entropy = new_dists[1].entropy()
-                entropy = movement_entropy + button_entropy
+                    new_logits_list, new_value = policy(b_obs[mb_idx])
+                    new_dists = [
+                        torch.distributions.Categorical(logits=lg)
+                        for lg in new_logits_list
+                    ]
+                    mb_acts = b_actions[mb_idx]
+                    new_logprob = sum(
+                        d.log_prob(mb_acts[:, i])
+                        for i, d in enumerate(new_dists)
+                    )
+                    movement_entropy = new_dists[0].entropy()
+                    button_entropy = new_dists[1].entropy()
+                    entropy = movement_entropy + button_entropy
 
-                logratio = new_logprob - b_logprobs[mb_idx]
-                ratio = logratio.exp()
+                    logratio = new_logprob - b_logprobs[mb_idx]
+                    ratio = logratio.exp()
 
-                # Approximate KL for diagnostics
-                with torch.no_grad():
-                    approx_kl = ((ratio - 1) - logratio).mean()
+                    with torch.no_grad():
+                        approx_kl = ((ratio - 1) - logratio).mean()
 
-                mb_advantages = b_advantages[mb_idx]
-                mb_advantages = (mb_advantages - mb_advantages.mean()) / (
-                    mb_advantages.std() + 1e-8
-                )
+                    # Apply IS weights to advantages before normalization
+                    # (matches PufferLib: mb_prio * normalized_adv)
+                    mb_advantages = b_advantages[mb_idx]
+                    mb_advantages = mb_is_weight * (
+                        (mb_advantages - mb_advantages.mean())
+                        / (mb_advantages.std() + 1e-8)
+                    )
 
-                # Clipped policy loss
-                pg_loss1 = -mb_advantages * ratio
-                pg_loss2 = -mb_advantages * torch.clamp(
-                    ratio, 1 - clip_coef, 1 + clip_coef
-                )
-                pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+                    # Clipped policy loss
+                    pg_loss1 = -mb_advantages * ratio
+                    pg_loss2 = -mb_advantages * torch.clamp(
+                        ratio, 1 - clip_coef, 1 + clip_coef
+                    )
+                    pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                # Value loss
-                v_loss = 0.5 * ((new_value - b_returns[mb_idx]) ** 2).mean()
+                    # Clipped value loss — prevents the value network from
+                    # making huge jumps on rare high-return transitions.
+                    v_clipped = b_values[mb_idx] + torch.clamp(
+                        new_value - b_values[mb_idx],
+                        -vf_clip_coef, vf_clip_coef,
+                    )
+                    v_loss_unclipped = (new_value - b_returns[mb_idx]) ** 2
+                    v_loss_clipped = (v_clipped - b_returns[mb_idx]) ** 2
+                    v_loss = 0.5 * torch.max(
+                        v_loss_unclipped, v_loss_clipped
+                    ).mean()
 
-                # Entropy bonus — main coefficient applies to total entropy,
-                # plus a separate higher coefficient on button entropy alone
-                # to prevent the button head from collapsing to always-NOP.
-                entropy_loss = entropy.mean()
-                button_entropy_loss = button_entropy.mean()
+                    entropy_loss = entropy.mean()
+                    button_entropy_loss = button_entropy.mean()
 
-                loss = (pg_loss
-                        - entropy_coeff * entropy_loss
-                        - button_entropy_coeff * button_entropy_loss
-                        + vf_coef * v_loss)
+                    loss = (pg_loss
+                            - entropy_coeff * entropy_loss
+                            - button_entropy_coeff * button_entropy_loss
+                            + vf_coef * v_loss)
 
-                optimizer.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
-                optimizer.step()
+                    optimizer.zero_grad()
+                    loss.backward()
+                    nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
+                    optimizer.step()
 
-                total_pg_loss += pg_loss.item()
+                    total_pg_loss += pg_loss.item()
+                    total_v_loss += v_loss.item()
+                    total_entropy += entropy_loss.item()
+                    total_button_entropy += button_entropy_loss.item()
+                    total_movement_entropy += movement_entropy.mean().item()
+                    total_approx_kl += approx_kl.item()
+                    num_updates += 1
+            else:
+                # Standard uniform sampling (original CleanRL-style PPO)
+                indices = torch.randperm(batch_size, device=device)
+                for start in range(0, batch_size, minibatch_size):
+                    end = start + minibatch_size
+                    mb_idx = indices[start:end]
+
+                    new_logits_list, new_value = policy(b_obs[mb_idx])
+                    new_dists = [
+                        torch.distributions.Categorical(logits=lg)
+                        for lg in new_logits_list
+                    ]
+                    mb_acts = b_actions[mb_idx]
+                    new_logprob = sum(
+                        d.log_prob(mb_acts[:, i])
+                        for i, d in enumerate(new_dists)
+                    )
+                    movement_entropy = new_dists[0].entropy()
+                    button_entropy = new_dists[1].entropy()
+                    entropy = movement_entropy + button_entropy
+
+                    logratio = new_logprob - b_logprobs[mb_idx]
+                    ratio = logratio.exp()
+
+                    with torch.no_grad():
+                        approx_kl = ((ratio - 1) - logratio).mean()
+
+                    mb_advantages = b_advantages[mb_idx]
+                    mb_advantages = (mb_advantages - mb_advantages.mean()) / (
+                        mb_advantages.std() + 1e-8
+                    )
+
+                    # Clipped policy loss
+                    pg_loss1 = -mb_advantages * ratio
+                    pg_loss2 = -mb_advantages * torch.clamp(
+                        ratio, 1 - clip_coef, 1 + clip_coef
+                    )
+                    pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+
+                    # Clipped value loss
+                    v_clipped = b_values[mb_idx] + torch.clamp(
+                        new_value - b_values[mb_idx],
+                        -vf_clip_coef, vf_clip_coef,
+                    )
+                    v_loss_unclipped = (new_value - b_returns[mb_idx]) ** 2
+                    v_loss_clipped = (v_clipped - b_returns[mb_idx]) ** 2
+                    v_loss = 0.5 * torch.max(
+                        v_loss_unclipped, v_loss_clipped
+                    ).mean()
+
+                    entropy_loss = entropy.mean()
+                    button_entropy_loss = button_entropy.mean()
+
+                    loss = (pg_loss
+                            - entropy_coeff * entropy_loss
+                            - button_entropy_coeff * button_entropy_loss
+                            + vf_coef * v_loss)
+
+                    optimizer.zero_grad()
+                    loss.backward()
+                    nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
+                    optimizer.step()
+
+                    total_pg_loss += pg_loss.item()
                 total_v_loss += v_loss.item()
                 total_entropy += entropy_loss.item()
                 total_button_entropy += button_entropy_loss.item()
@@ -976,6 +1086,13 @@ def main():
     clip_coef = float(os.getenv("CLIP_COEF", "0.2"))
     gamma = float(os.getenv("GAMMA", "0.999"))
 
+    # Prioritized Experience Replay (PER) — samples high-advantage
+    # transitions more often during PPO updates.  Critical for rare
+    # high-reward events like gate slashing.  Matches PufferLib defaults.
+    prio_alpha = float(os.getenv("PRIO_ALPHA", "0.0"))  # 0 = disabled
+    prio_beta0 = float(os.getenv("PRIO_BETA0", "0.2"))
+    vf_clip_coef = float(os.getenv("VF_CLIP_COEF", "0.2"))
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Device: %s", device)
     if device.type == "cuda":
@@ -1173,6 +1290,10 @@ def main():
             update_epochs=update_epochs,
             clip_coef=clip_coef,
             gamma=gamma,
+            prio_alpha=prio_alpha,
+            prio_beta0=prio_beta0,
+            vf_clip_coef=vf_clip_coef,
+            max_epochs=max_epochs,
         )
 
         # Always continue from latest checkpoint to avoid reverting
