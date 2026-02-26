@@ -264,6 +264,7 @@ class RewardWrapper(gym.Wrapper):
         self._milestone_visited_maku_tree = False
         self._rewarded_maku_visit = False
         self._rewarded_dungeon_entry = False
+        self._rewarded_indoor_entry = False
         self._milestone_entered_snow_region = False
         self._milestone_essences = 0
         self._milestone_dungeon_keys = 0
@@ -461,6 +462,7 @@ class RewardWrapper(gym.Wrapper):
         self._milestone_visited_maku_tree = False
         self._rewarded_maku_visit = False
         self._rewarded_dungeon_entry = False
+        self._rewarded_indoor_entry = False
         self._milestone_entered_snow_region = False
         self._milestone_essences = 0
         self._milestone_dungeon_keys = 0
@@ -734,8 +736,13 @@ class RewardWrapper(gym.Wrapper):
             self._milestone_achieved_this_step = True
             self._capture_milestone_state("visited_maku_tree", reward)
 
-        # Indoor area bonus
-        if active_group == 3 and self._prev_group != 3:
+        # Indoor area bonus — once per episode to prevent boundary farming.
+        # v18 showed the agent oscillating at doorways 314 times/ep for 1,570
+        # reward, drowning out gate slash (2,000) through reliability.
+        if (active_group == 3
+                and self._prev_group != 3
+                and not self._rewarded_indoor_entry):
+            self._rewarded_indoor_entry = True
             reward += self._indoor_entry_bonus
             self._acc_indoor_entry += self._indoor_entry_bonus
 
