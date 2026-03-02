@@ -33,6 +33,16 @@
 </head>
 <body>
   <div id="app"></div>
+
+  <!-- Epoch-review overlay — shown when all training agents disconnect -->
+  <div id="epoch-overlay" class="hidden">
+    <div class="epoch-overlay-content">
+      <div class="epoch-spinner"></div>
+      <div class="epoch-title">Epoch Review in Progress</div>
+      <div id="epoch-reason" class="epoch-reason">Reviewing results and preparing next epoch…</div>
+    </div>
+  </div>
+
   <div id="info-bar">
     <span id="status">Connecting...</span>
     <span>

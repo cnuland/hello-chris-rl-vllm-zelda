@@ -61,7 +61,16 @@ class EpisodeSegment:
 
 
 class EpisodeExporter:
-    """Exports episode segments to MinIO for evaluator consumption."""
+    """Exports episode segments to MinIO for evaluator consumption.
+
+    Supports two modes:
+      - **immediate** (default): uploads each segment to S3 as it fills.
+      - **deferred**: buffers segments in memory and only uploads them
+        when ``commit_episode()`` is called.  Use this when you want to
+        capture the *entire* episode but only upload it if a milestone
+        (e.g. dungeon entry) fires.  Call ``discard_episode()`` to drop
+        the buffered segments without uploading.
+    """
 
     def __init__(
         self,
@@ -70,23 +79,29 @@ class EpisodeExporter:
         frames_per_segment: int = 300,
         png_interval: int = 10,  # save PNG every N frames
         epoch: int = 0,
+        deferred: bool = False,
     ):
         self._s3 = s3_client
         self._bucket = bucket
         self._frames_per_segment = frames_per_segment
         self._png_interval = png_interval
         self._epoch = epoch
+        self._deferred = deferred
 
         # Buffer
         self._current_frames: list[FrameRecord] = []
         self._episode_id = ""
         self._episode_reward = 0.0
 
+        # Deferred-mode segment buffer (uploaded on commit, dropped on discard)
+        self._deferred_segments: list[EpisodeSegment] = []
+
     def begin_episode(self, episode_id: str | None = None) -> str:
         """Start tracking a new episode."""
         self._episode_id = episode_id or str(uuid.uuid4())[:12]
         self._current_frames.clear()
         self._episode_reward = 0.0
+        self._deferred_segments.clear()
         return self._episode_id
 
     def record_frame(
@@ -123,6 +138,24 @@ class EpisodeExporter:
                 segments.append(seg)
         return segments
 
+    def commit_episode(self) -> int:
+        """Upload all deferred segments to S3.  Returns count uploaded."""
+        if not self._deferred or self._s3 is None:
+            return 0
+        count = 0
+        for seg in self._deferred_segments:
+            self._upload_segment(seg)
+            count += 1
+        self._deferred_segments.clear()
+        logger.info(
+            "Committed episode %s (%d segments)", self._episode_id, count,
+        )
+        return count
+
+    def discard_episode(self) -> None:
+        """Drop all deferred segments without uploading."""
+        self._deferred_segments.clear()
+
     def _flush_segment(self) -> EpisodeSegment | None:
         if not self._current_frames:
             return None
@@ -140,7 +173,10 @@ class EpisodeExporter:
         )
         self._current_frames.clear()
 
-        if self._s3 is not None:
+        if self._deferred:
+            # Buffer for later commit/discard
+            self._deferred_segments.append(seg)
+        elif self._s3 is not None:
             self._upload_segment(seg)
 
         return seg

@@ -353,6 +353,7 @@ def run_training_epoch(
     prio_beta0: float = 0.2,
     vf_clip_coef: float = 0.2,
     max_epochs: int = 48,
+    current_milestone: str | None = None,
 ) -> tuple[str, float, dict]:
     """Run one epoch of CleanRL-style PPO training with PufferLib envs.
 
@@ -963,7 +964,7 @@ def run_training_epoch(
         milestones=milestones,
         episodes_completed=len(completed_rewards),
         milestone_state_dir=milestone_state_dir,
-        current_milestone=None,  # overridden by caller
+        current_milestone=current_milestone,
         threshold=0.40,  # 40% of episodes must achieve milestone before advancing
     )
 
@@ -1193,6 +1194,16 @@ def main():
             "Gate proximity shaping: %.1f scale, target tile (%d, %d) in room 0xD9",
             gate_proximity, gate_tile_x, gate_tile_y,
         )
+    # Maku Tree quest reward overrides — boost these to make the
+    # Maku Tree sequence competitive with exploration after gate slash.
+    maku_tree_visit = os.getenv("MAKU_TREE_VISIT")
+    if maku_tree_visit is not None:
+        reward_overrides["maku_tree_visit"] = float(maku_tree_visit)
+        logger.info("Maku Tree visit bonus: %.0f", float(maku_tree_visit))
+    gnarled_key_bonus = os.getenv("GNARLED_KEY")
+    if gnarled_key_bonus is not None:
+        reward_overrides["gnarled_key"] = float(gnarled_key_bonus)
+        logger.info("Gnarled Key bonus: %.0f", float(gnarled_key_bonus))
     # Coverage cap — hard ceiling on per-episode exploration reward.
     # Applied globally (all phases) to prevent the agent from exploiting
     # uncapped phases (e.g., maku_interaction with 3× area boost).
@@ -1294,6 +1305,7 @@ def main():
             prio_beta0=prio_beta0,
             vf_clip_coef=vf_clip_coef,
             max_epochs=max_epochs,
+            current_milestone=current_milestone,
         )
 
         # Always continue from latest checkpoint to avoid reverting
@@ -1328,15 +1340,11 @@ def main():
                 current_milestone,
                 advancement.percentage * 100,
             )
-        elif current_milestone and mean_reward < (global_best_mean * 0.5):
-            # Rollback: advancing state caused significant regression
-            logger.warning(
-                "ROLLBACK: Mean reward %.1f is <50%% of best %.1f -- "
-                "reverting to original save state",
-                mean_reward, global_best_mean,
-            )
-            save_state_path = original_save_state_path
-            current_milestone = None
+        # NOTE: Rollback removed in v24 — it was resetting current_milestone
+        # to None, bypassing the forward-only constraint and causing the
+        # checkpoint to cycle: gate_slashed→gnarled_key→rollback→gate_slashed.
+        # The 50/50 curriculum split already limits damage from suboptimal
+        # advancing checkpoints, so rollback is unnecessary.
 
         # Phase 2: Evaluation + reward model + reward advisor
         if run_eval:

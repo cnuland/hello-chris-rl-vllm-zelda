@@ -25,6 +25,7 @@ from agent.env.ram_addresses import (
     ACTIVE_GROUP,
     DIALOG_STATE,
     DUNGEON_FLOOR,
+    DUNGEON_INDEX,
     DUNGEON_KEYS,
     ESSENCES_COLLECTED,
     GNARLED_KEY_GIVEN_FLAG,
@@ -116,6 +117,7 @@ class RewardWrapper(gym.Wrapper):
         self._maku_room_bonus = cfg.get("maku_room", 100.0)
         self._maku_stage_bonus = cfg.get("maku_stage", 300.0)
         self._gate_slashed = False
+        self._baseline_gate_slashed = False
         self._maku_rooms_visited: set[int] = set()
         self._prev_maku_stage = 0
 
@@ -143,15 +145,15 @@ class RewardWrapper(gym.Wrapper):
         # where to direct exploration.
         self._directional_bonus = cfg.get("directional_bonus", 0.0)
         self._directional_target_row = int(cfg.get("directional_target_row",
-                                                    os.getenv("DIRECTIONAL_TARGET_ROW", "5")))
+                                                    os.getenv("DIRECTIONAL_TARGET_ROW", "9")))
         self._directional_target_col = int(cfg.get("directional_target_col",
-                                                    os.getenv("DIRECTIONAL_TARGET_COL", "12")))
+                                                    os.getenv("DIRECTIONAL_TARGET_COL", "6")))
         self._directional_target_scale = float(cfg.get("directional_target_scale", "1.0"))
         self._min_target_distance = 999
 
         # Post-Gnarled-Key phase: once the agent has the key, suppress all
         # Maku Tree farming rewards and activate directional guidance toward
-        # Dungeon 1 at (row=10, col=4).
+        # Dungeon 1 entrance at (row=9, col=6).
         self._post_key_directional_activated = False
         self._maku_loiter_penalty = cfg.get("maku_loiter_penalty", 1.0)
 
@@ -169,7 +171,7 @@ class RewardWrapper(gym.Wrapper):
         self._snow_region_max_row = int(cfg.get("snow_region_max_row",
                                                  os.getenv("SNOW_REGION_MAX_ROW", "11")))
         self._snow_region_max_col = int(cfg.get("snow_region_max_col",
-                                                 os.getenv("SNOW_REGION_MAX_COL", "5")))
+                                                 os.getenv("SNOW_REGION_MAX_COL", "8")))
         self._entered_snow_region = False
 
         # Structured directives from the LLM reward advisor — processed as
@@ -277,11 +279,23 @@ class RewardWrapper(gym.Wrapper):
         # Episode export
         self._exporter = None
         self._enable_export = enable_export
+        # MILESTONE_EXPORT: all envs export, but only upload episodes that
+        # achieve significant milestones (dungeon entry, snow region, etc.)
+        self._milestone_export = os.getenv("MILESTONE_EXPORT", "").lower() in ("1", "true")
+        self._episode_worthy = False  # set True when a milestone fires
         if enable_export:
-            import random
-            export_prob = max(0.10, 1.0 / max(int(os.getenv("NUM_ENVS", "1")), 1))
-            if random.random() < export_prob:
-                self._init_exporter(s3_config)
+            if self._milestone_export:
+                # All envs participate in deferred mode
+                self._init_exporter(s3_config, deferred=True)
+            else:
+                import random
+                export_prob_str = os.getenv("EXPORT_PROB", "")
+                if export_prob_str:
+                    export_prob = float(export_prob_str)
+                else:
+                    export_prob = max(0.10, 1.0 / max(int(os.getenv("NUM_ENVS", "1")), 1))
+                if random.random() < export_prob:
+                    self._init_exporter(s3_config)
 
     def _load_reward_model(self, path: str) -> None:
         try:
@@ -326,7 +340,9 @@ class RewardWrapper(gym.Wrapper):
             logger.warning("Could not load reward model: %s", e)
             self._reward_model = None
 
-    def _init_exporter(self, s3_config: dict[str, str] | None) -> None:
+    def _init_exporter(
+        self, s3_config: dict[str, str] | None, deferred: bool = False,
+    ) -> None:
         try:
             from agent.evaluator.exporter import EpisodeExporter
             from agent.utils.s3 import S3Client
@@ -342,8 +358,9 @@ class RewardWrapper(gym.Wrapper):
                 s3_client=s3,
                 bucket=cfg.episodes_bucket,
                 frames_per_segment=300,
-                png_interval=60,
+                png_interval=int(os.getenv("PNG_INTERVAL", "60")),
                 epoch=self._epoch,
+                deferred=deferred,
             )
         except Exception as e:
             logger.warning("Episode export disabled: %s", e)
@@ -432,13 +449,22 @@ class RewardWrapper(gym.Wrapper):
         self._prev_frontier_dist = 0
         self._prev_room_for_exit = -1
 
-        # Directional bonus tracking — initialize from starting position
+        # Directional bonus tracking — initialize from starting position.
+        # Only meaningful on the overworld (group 0) where room IDs encode
+        # a 16×16 grid.  Indoor/dungeon room IDs use a different coordinate
+        # space, so we defer min_distance calculation to the first overworld step.
         self._start_room_id = info.get("room_id", 0)
         self._start_group = info.get("active_group", 0)
-        start_row = self._start_room_id // 16
-        start_col = self._start_room_id % 16
-        self._min_target_distance = (abs(start_row - self._directional_target_row) +
-                                     abs(start_col - self._directional_target_col))
+        self._last_overworld_room = None
+        if self._start_group == 0:
+            start_row = self._start_room_id // 16
+            start_col = self._start_room_id % 16
+            self._min_target_distance = (abs(start_row - self._directional_target_row) +
+                                         abs(start_col - self._directional_target_col))
+            self._last_overworld_room = self._start_room_id
+        else:
+            # Starting inside building/dungeon — defer to first overworld step
+            self._min_target_distance = -1
 
         # Reset triggered directives for new episode
         self._triggered_directives.clear()
@@ -474,7 +500,15 @@ class RewardWrapper(gym.Wrapper):
         self._baseline_maku_seed = self._prev_maku_seed
         self._baseline_maku_stage = self._prev_maku_stage
         self._baseline_group = self._prev_group
-        self._gate_slashed = False
+        # Detect gate-slash baseline from save state RAM — mirrors
+        # baseline_gnarled_key pattern.  If the save state already has the
+        # gate slashed, we start in post_gate phase without awarding bonus.
+        if hasattr(self.env, "_read"):
+            gate_flags = self.env._read(OVERWORLD_ROOM_FLAGS + MAKU_GATE_ROOM)
+            self._baseline_gate_slashed = bool(gate_flags & ROOMFLAG_GATE_HIT)
+        else:
+            self._baseline_gate_slashed = False
+        self._gate_slashed = self._baseline_gate_slashed
         self._prev_gate_dist = 0.0
         self._entered_snow_region = False
         self._loiter_steps_in_group.clear()
@@ -502,6 +536,7 @@ class RewardWrapper(gym.Wrapper):
             active_group=self._prev_group,
             baseline_sword=self._baseline_sword,
             baseline_gnarled_key=self._baseline_gnarled_key,
+            gate_slashed=self._gate_slashed,
         )
         profile = self._phase_manager.active_profile
         if profile.directional_target is not None:
@@ -517,6 +552,7 @@ class RewardWrapper(gym.Wrapper):
         self.env._visited_rooms_set = self._coverage._visited_rooms
 
         # Start episode recording
+        self._episode_worthy = False
         if self._exporter:
             self._episode_id = self._exporter.begin_episode()
             info["episode_id"] = self._episode_id
@@ -563,6 +599,12 @@ class RewardWrapper(gym.Wrapper):
         # Flush on episode end
         if (terminated or truncated) and self._exporter:
             self._exporter.end_episode()
+            # In milestone-export mode, only upload episodes that hit milestones
+            if self._milestone_export:
+                if self._episode_worthy:
+                    self._exporter.commit_episode()
+                else:
+                    self._exporter.discard_episode()
 
         # Log reward breakdown for every episode (reset flag in reset())
         if (terminated or truncated) and not self._logged_breakdown:
@@ -618,7 +660,9 @@ class RewardWrapper(gym.Wrapper):
             self._milestone_dungeon_keys = max(self._milestone_dungeon_keys, keys)
             essences = bin(self.env._read(ESSENCES_COLLECTED)).count("1")
             self._milestone_essences = max(self._milestone_essences, essences)
-        if active_group in (4, 5) and self._baseline_group not in (4, 5):
+        dungeon_index = info.get("dungeon_index", 0xFF)
+        if (active_group in (4, 5) and self._baseline_group not in (4, 5)
+                and dungeon_index != 0xFF):
             self._milestone_entered_dungeon = True
         if active_group == 2 and self._baseline_group != 2:
             self._milestone_visited_maku_tree = True
@@ -645,7 +689,9 @@ class RewardWrapper(gym.Wrapper):
         info["milestone_maku_seed"] = float(
             self._prev_maku_seed and not self._baseline_maku_seed
         )
-        info["milestone_gate_slashed"] = float(self._gate_slashed)
+        info["milestone_gate_slashed"] = float(
+            self._gate_slashed and not self._baseline_gate_slashed
+        )
         info["milestone_entered_snow_region"] = float(self._milestone_entered_snow_region)
         info["milestone_maku_rooms"] = float(len(self._maku_rooms_visited))
         info["milestone_maku_stage"] = float(
@@ -660,6 +706,7 @@ class RewardWrapper(gym.Wrapper):
         info["baseline_maku_stage"] = float(self._baseline_maku_stage)
         info["baseline_in_maku"] = float(self._baseline_group == 2)
         info["baseline_in_dungeon"] = float(self._baseline_group in (4, 5))
+        info["baseline_gate_slashed"] = float(self._baseline_gate_slashed)
 
         return obs, reward, terminated, truncated, info
 
@@ -717,13 +764,22 @@ class RewardWrapper(gym.Wrapper):
                 self.env._read(GNARLED_KEY_OBTAINED) & GNARLED_KEY_OBTAINED_MASK
             )
 
-        # Dungeon entry bonus — ONE-TIME per episode
+        # Dungeon entry bonus — ONE-TIME per episode, real dungeons only
+        # dungeon_index=0xFF means overworld/cave (e.g. Great Fairy Cave),
+        # 0=Gnarled Root (D1), 1=Snake's Remains (D2), etc.
+        dungeon_idx = info.get("dungeon_index", 0xFF)
         if (active_group in (4, 5) and self._prev_group not in (4, 5)
+                and dungeon_idx != 0xFF
                 and not self._rewarded_dungeon_entry):
             self._rewarded_dungeon_entry = True
             reward += self._dungeon_entry_bonus
             self._milestone_achieved_this_step = True
+            self._episode_worthy = True  # Mark for deferred export
             self._capture_milestone_state("entered_dungeon", reward)
+            logger.info(
+                "DUNGEON ENTRY: dungeon_index=%d, group=%d, room=%d",
+                dungeon_idx, active_group, room_id,
+            )
 
         # Maku Tree visit bonus — ONE-TIME per episode, suppressed in post-key phases.
         # Previously fired on every group transition into group 2, allowing
@@ -746,8 +802,9 @@ class RewardWrapper(gym.Wrapper):
             reward += self._indoor_entry_bonus
             self._acc_indoor_entry += self._indoor_entry_bonus
 
-        # Dungeon floor change bonus
-        if dungeon_floor != self._prev_dungeon_floor and active_group in (4, 5):
+        # Dungeon floor change bonus (real dungeons only)
+        if (dungeon_floor != self._prev_dungeon_floor
+                and active_group in (4, 5) and dungeon_idx != 0xFF):
             reward += self._dungeon_floor_bonus
 
         self._prev_group = active_group
@@ -834,15 +891,17 @@ class RewardWrapper(gym.Wrapper):
             gate_flags = self.env._read(OVERWORLD_ROOM_FLAGS + MAKU_GATE_ROOM)
             if gate_flags & ROOMFLAG_GATE_HIT:
                 self._gate_slashed = True
-                reward += self._gate_slash_bonus
                 self._milestone_achieved_this_step = True
-                logger.info(
-                    "MILESTONE: Maku Tree gate slashed! "
-                    "addr=0x%04X flags=0x%02X (+%.0f)",
-                    OVERWORLD_ROOM_FLAGS + MAKU_GATE_ROOM,
-                    gate_flags, self._gate_slash_bonus,
-                )
-                self._capture_milestone_state("gate_slashed", reward)
+                if not self._baseline_gate_slashed:
+                    # Within-episode gate slash — award bonus
+                    reward += self._gate_slash_bonus
+                    logger.info(
+                        "MILESTONE: Maku Tree gate slashed! "
+                        "addr=0x%04X flags=0x%02X (+%.0f)",
+                        OVERWORLD_ROOM_FLAGS + MAKU_GATE_ROOM,
+                        gate_flags, self._gate_slash_bonus,
+                    )
+                    self._capture_milestone_state("gate_slashed", reward)
 
         # --- Gate proximity shaping (overworld only) ---
         # Potential-based reward: positive when approaching the gate tile,
@@ -939,6 +998,7 @@ class RewardWrapper(gym.Wrapper):
                 self._entered_snow_region = True
                 self._milestone_entered_snow_region = True
                 self._milestone_achieved_this_step = True
+                self._episode_worthy = True  # Mark for deferred export
                 reward += self._snow_region_bonus
                 logger.info(
                     "MILESTONE: Entered snow region at room (%d,%d)! (+%.0f)",
@@ -960,6 +1020,7 @@ class RewardWrapper(gym.Wrapper):
                 baseline_sword=self._baseline_sword,
                 baseline_gnarled_key=self._baseline_gnarled_key,
                 step=info.get("step", 0),
+                gate_slashed=self._gate_slashed,
             )
             if phase_changed:
                 profile = self._phase_manager.active_profile
@@ -974,16 +1035,28 @@ class RewardWrapper(gym.Wrapper):
                     if profile.directional_bonus > 0 and self._directional_bonus == 0.0:
                         self._directional_bonus = profile.directional_bonus
                     # Only reset min distance when the TARGET actually changes
-                    # (e.g., pre_maku→post_key switches from Maku Tree to Dungeon 1).
+                    # (e.g., maku_interaction→post_key switches from gate to D1).
                     # Don't reset on same-target phase oscillations (pre_maku ↔
-                    # maku_interaction both target 5,12) — that allows farming
+                    # maku_interaction both target 13,9) — that allows farming
                     # directional reward by crossing group boundaries repeatedly.
                     if target_changed:
-                        room_id = info.get("room_id", 0)
-                        self._min_target_distance = (
-                            abs(room_id // 16 - self._directional_target_row)
-                            + abs(room_id % 16 - self._directional_target_col)
-                        )
+                        if active_group == 0:
+                            # On overworld: use actual position
+                            ref_room = info.get("room_id", 0)
+                            self._min_target_distance = (
+                                abs(ref_room // 16 - new_row)
+                                + abs(ref_room % 16 - new_col)
+                            )
+                        elif self._last_overworld_room is not None:
+                            # Inside building: use last overworld position
+                            ref_room = self._last_overworld_room
+                            self._min_target_distance = (
+                                abs(ref_room // 16 - new_row)
+                                + abs(ref_room % 16 - new_col)
+                            )
+                        else:
+                            # Never been on overworld — defer to first step
+                            self._min_target_distance = -1
 
         # --- Sword interaction bonus ---
         if self._sword_use_bonus > 0 and self._current_button == ButtonAction.A:
@@ -1084,15 +1157,25 @@ class RewardWrapper(gym.Wrapper):
             self._prev_pixel_x = cur_pixel_x
             self._prev_pixel_y = cur_pixel_y
 
-        # --- Directional bonus (LLM-controlled, default OFF) ---
-        # Only active when the LLM advisor sets directional_bonus > 0.
-        if not is_transitioning and self._directional_bonus > 0:
+        # --- Directional bonus (overworld only) ---
+        # Only fires on group 0 where room IDs encode a 16×16 overworld grid.
+        # Indoor/dungeon rooms have different coordinate spaces that would
+        # produce nonsensical distances.  This also prevents the "Maku Tree
+        # exit bonus" where exiting from interior room (0,11) to overworld
+        # (13,9) would earn 7 rooms of "free" directional reward.
+        if (not is_transitioning
+                and self._directional_bonus > 0
+                and active_group == 0):
             room_id = info.get("room_id", 0)
+            self._last_overworld_room = room_id
             cur_row = room_id // 16
             cur_col = room_id % 16
             target_dist = (abs(cur_row - self._directional_target_row) +
                           abs(cur_col - self._directional_target_col))
-            if target_dist < self._min_target_distance:
+            if self._min_target_distance < 0:
+                # Deferred init: first overworld step after starting indoors
+                self._min_target_distance = target_dist
+            elif target_dist < self._min_target_distance:
                 delta = self._min_target_distance - target_dist
                 dir_rew = delta * self._directional_bonus * self._directional_target_scale
                 reward += dir_rew

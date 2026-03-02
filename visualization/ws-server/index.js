@@ -38,9 +38,31 @@ let latestByAgent = new Map();
 // Track connected receivers
 let receivers = new Set();
 
+// Track connected broadcasters (trainers) for epoch-review detection
+let broadcasters = new Set();
+
+/**
+ * Broadcast a system status message to all connected browser clients.
+ */
+function broadcastStatus(state, reason) {
+  const msg = JSON.stringify({ name: "status", state, reason: reason || "" });
+  for (const receiver of receivers) {
+    if (receiver.readyState === 1) {
+      receiver.send(msg);
+    }
+  }
+}
+
 // --- /broadcast endpoint: Python trainer sends data here ---
 app.ws("/broadcast", (ws, req) => {
-  console.log("[broadcast] Trainer connected");
+  const wasEmpty = broadcasters.size === 0;
+  broadcasters.add(ws);
+  console.log(`[broadcast] Trainer connected (${broadcasters.size} active)`);
+
+  // If trainers just came back from an epoch review, notify browsers
+  if (wasEmpty) {
+    broadcastStatus("active");
+  }
 
   ws.on("message", (msg) => {
     try {
@@ -65,7 +87,16 @@ app.ws("/broadcast", (ws, req) => {
   });
 
   ws.on("close", () => {
-    console.log("[broadcast] Trainer disconnected");
+    broadcasters.delete(ws);
+    console.log(`[broadcast] Trainer disconnected (${broadcasters.size} active)`);
+
+    // When all trainers disconnect, an epoch is being reviewed
+    if (broadcasters.size === 0) {
+      broadcastStatus(
+        "epoch_review",
+        "Epoch complete — reviewing results and preparing next epoch…"
+      );
+    }
   });
 });
 
@@ -78,6 +109,17 @@ app.ws("/receive", (ws, req) => {
   // cursor positions immediately instead of waiting for each env to flush.
   for (const msg of latestByAgent.values()) {
     ws.send(msg);
+  }
+
+  // If no trainers are currently connected, immediately tell the new
+  // browser client that an epoch review is in progress.
+  if (broadcasters.size === 0) {
+    const status = JSON.stringify({
+      name: "status",
+      state: "epoch_review",
+      reason: "Epoch complete — reviewing results and preparing next epoch…",
+    });
+    ws.send(status);
   }
 
   ws.on("close", () => {

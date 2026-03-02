@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 EPISODE_PHASES = [
     "pre_sword",
     "pre_maku",
+    "post_gate",
     "maku_interaction",
     "post_key",
     "snow_region",
@@ -108,12 +109,20 @@ DEFAULT_PHASE_PROFILES: dict[str, PhaseRewardProfile] = {
         coverage_reward_cap=2000.0,  # Cap exploration so milestone rewards dominate
     ),
     "pre_maku": PhaseRewardProfile(
-        directional_target=(5, 12),  # Maku Tree path (northeast)
+        directional_target=(13, 9),  # Maku Gate room — agent starts here
         dialog_advance_groups=frozenset({2, 3}),
         coverage_reward_cap=2000.0,  # Cap exploration so gate slash reward is visible
     ),
+    "post_gate": PhaseRewardProfile(
+        # Gate slashed but no Gnarled Key yet — create a reward desert
+        # that forces the agent to enter the Maku Tree.  Coverage is zero
+        # so the ONLY way to earn more is through the Maku Tree sequence.
+        directional_target=(13, 9),  # Maku Tree entrance is at gate room
+        dialog_advance_groups=frozenset({2}),  # Only Maku Tree dialog counts
+        coverage_reward_cap=0.0,  # NO exploration reward after gate slash
+    ),
     "maku_interaction": PhaseRewardProfile(
-        directional_target=(5, 12),  # Stay near Maku Tree
+        directional_target=(13, 9),  # Gate room (irrelevant while in group 2)
         dialog_advance_groups=frozenset({2, 3}),
         # All Maku sub-events active (default behavior, nothing suppressed)
     ),
@@ -122,10 +131,15 @@ DEFAULT_PHASE_PROFILES: dict[str, PhaseRewardProfile] = {
         suppressed=["maku_tree_visit", "maku_room", "maku_stage"],
         # Restrict dialog advance to group 3 only (Maku dialog no longer relevant)
         dialog_advance_groups=frozenset({3}),
-        # Direct toward Dungeon 1
-        directional_target=(10, 4),
+        # Direct toward Dungeon 1 entrance at (9,6) — traced route:
+        # (13,9)→(13,8)→(13,7)→(12,7)→(12,6)→(11,6)→(10,6)→(10,7)→(9,7)→(9,6)
+        directional_target=(9, 6),
         directional_bonus=50.0,
         directional_scale=1.0,
+        # Coverage desert — ZERO exploration reward after getting the key.
+        # Forces agent to earn rewards solely through directional navigation
+        # toward Dungeon 1, just like post_gate forces Maku Tree entry.
+        coverage_reward_cap=0.0,
         # Penalize loitering in Maku Tree area — reduced from 1.0 to 0.1
         # to avoid PPO learning "never enter the Maku Tree."  The penalty
         # should be low enough that the gnarled_key bonus (500) + maku_tree
@@ -139,9 +153,12 @@ DEFAULT_PHASE_PROFILES: dict[str, PhaseRewardProfile] = {
         # Same suppressions as post_key — still heading to dungeon
         suppressed=["maku_tree_visit", "maku_room", "maku_stage"],
         dialog_advance_groups=frozenset({3}),
-        directional_target=(10, 4),
+        # Dungeon 1 entrance at overworld (9,6)
+        directional_target=(9, 6),
         directional_bonus=50.0,
         directional_scale=1.0,
+        # Coverage desert — keep agent focused on reaching dungeon entrance
+        coverage_reward_cap=0.0,
         loiter_penalties={2: 0.1},
         loiter_grace_steps=3000,
     ),
@@ -166,6 +183,7 @@ def detect_episode_phase(
     entered_snow_region: bool,
     baseline_sword: int = 0,
     baseline_gnarled_key: bool = False,
+    gate_slashed: bool = False,
 ) -> str:
     """Detect the current game phase from live RAM state.
 
@@ -181,6 +199,7 @@ def detect_episode_phase(
             this episode (sticky per-episode flag).
         baseline_sword: Sword level at episode start (from save state).
         baseline_gnarled_key: Whether the save state already had the key.
+        gate_slashed: Whether the Maku Tree gate has been slashed this episode.
 
     Returns:
         Phase string from EPISODE_PHASES.
@@ -203,7 +222,11 @@ def detect_episode_phase(
     if sword_level == 0 and baseline_sword == 0:
         return "pre_sword"
 
-    # Has sword, heading to Maku Tree
+    # Gate slashed but no key yet — reward desert forces Maku Tree entry
+    if gate_slashed:
+        return "post_gate"
+
+    # Has sword, heading to Maku Tree gate
     return "pre_maku"
 
 
@@ -266,6 +289,7 @@ class PhaseManager:
         active_group: int,
         baseline_sword: int = 0,
         baseline_gnarled_key: bool = False,
+        gate_slashed: bool = False,
     ) -> str:
         """Detect initial phase at episode start.
 
@@ -279,6 +303,7 @@ class PhaseManager:
             entered_snow_region=False,
             baseline_sword=baseline_sword,
             baseline_gnarled_key=baseline_gnarled_key,
+            gate_slashed=gate_slashed,
         )
         self._phase_history = [(self._current_phase, 0)]
         self._logged_transitions.clear()
@@ -294,6 +319,7 @@ class PhaseManager:
         baseline_sword: int = 0,
         baseline_gnarled_key: bool = False,
         step: int = 0,
+        gate_slashed: bool = False,
     ) -> bool:
         """Re-detect phase after a milestone event.
 
@@ -307,6 +333,7 @@ class PhaseManager:
             entered_snow_region=entered_snow_region,
             baseline_sword=baseline_sword,
             baseline_gnarled_key=baseline_gnarled_key,
+            gate_slashed=gate_slashed,
         )
         if new_phase != self._current_phase:
             old_phase = self._current_phase

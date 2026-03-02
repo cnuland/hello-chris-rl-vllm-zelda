@@ -50,6 +50,33 @@ class TestDetectEpisodePhase:
             baseline_sword=1, baseline_gnarled_key=False,
         ) == "pre_maku"
 
+    def test_gate_slashed_returns_post_gate(self):
+        """After gate slash but before key, should enter post_gate."""
+        assert detect_episode_phase(
+            sword_level=1, has_gnarled_key=False,
+            active_group=0, entered_snow_region=False,
+            baseline_sword=1, baseline_gnarled_key=False,
+            gate_slashed=True,
+        ) == "post_gate"
+
+    def test_gate_slashed_but_in_maku_returns_maku_interaction(self):
+        """Maku Tree area takes priority over post_gate."""
+        assert detect_episode_phase(
+            sword_level=1, has_gnarled_key=False,
+            active_group=2, entered_snow_region=False,
+            baseline_sword=1, baseline_gnarled_key=False,
+            gate_slashed=True,
+        ) == "maku_interaction"
+
+    def test_gate_slashed_with_key_returns_post_key(self):
+        """Having the key takes priority over gate_slashed."""
+        assert detect_episode_phase(
+            sword_level=1, has_gnarled_key=True,
+            active_group=0, entered_snow_region=False,
+            baseline_sword=1, baseline_gnarled_key=False,
+            gate_slashed=True,
+        ) == "post_key"
+
     def test_in_maku_group_returns_maku_interaction(self):
         assert detect_episode_phase(
             sword_level=1, has_gnarled_key=False,
@@ -181,6 +208,45 @@ class TestPhaseManager:
         assert len(manager.phase_history) == 2
         assert manager.phase_history[1] == ("pre_maku", 50)
 
+    def test_post_gate_transition(self):
+        """Gate slash should transition pre_maku -> post_gate."""
+        manager = PhaseManager()
+        manager.reset(
+            sword_level=1, has_gnarled_key=False,
+            active_group=0, baseline_sword=1,
+            baseline_gnarled_key=False,
+        )
+        assert manager.current_phase == "pre_maku"
+
+        changed = manager.update_phase(
+            sword_level=1, has_gnarled_key=False,
+            active_group=0, entered_snow_region=False,
+            baseline_sword=1, baseline_gnarled_key=False,
+            gate_slashed=True,
+        )
+        assert changed is True
+        assert manager.current_phase == "post_gate"
+
+    def test_post_gate_to_maku_interaction(self):
+        """Entering Maku Tree from post_gate."""
+        manager = PhaseManager()
+        manager.reset(
+            sword_level=1, has_gnarled_key=False,
+            active_group=0, baseline_sword=1,
+            baseline_gnarled_key=False,
+            gate_slashed=True,
+        )
+        assert manager.current_phase == "post_gate"
+
+        changed = manager.update_phase(
+            sword_level=1, has_gnarled_key=False,
+            active_group=2, entered_snow_region=False,
+            baseline_sword=1, baseline_gnarled_key=False,
+            gate_slashed=True,
+        )
+        assert changed is True
+        assert manager.current_phase == "maku_interaction"
+
     def test_snow_region_transition(self):
         manager = PhaseManager()
         manager.reset(
@@ -216,6 +282,27 @@ class TestDefaultProfileBackwardCompat:
     def test_pre_maku_no_suppressions(self):
         profile = DEFAULT_PHASE_PROFILES["pre_maku"]
         assert "maku_tree_visit" not in profile.suppressed
+
+    def test_post_gate_no_suppressions(self):
+        """post_gate allows Maku Tree rewards (agent needs to enter Maku Tree)."""
+        profile = DEFAULT_PHASE_PROFILES["post_gate"]
+        assert "maku_tree_visit" not in profile.suppressed
+        assert "maku_room" not in profile.suppressed
+
+    def test_post_gate_zero_coverage_cap(self):
+        """post_gate has zero coverage cap to create reward desert."""
+        profile = DEFAULT_PHASE_PROFILES["post_gate"]
+        assert profile.coverage_reward_cap == 0.0
+
+    def test_post_gate_dialog_only_group2(self):
+        """post_gate only rewards dialog in Maku Tree area (group 2)."""
+        profile = DEFAULT_PHASE_PROFILES["post_gate"]
+        assert 2 in profile.dialog_advance_groups
+        assert 3 not in profile.dialog_advance_groups
+
+    def test_post_gate_directional_target_maku_tree(self):
+        profile = DEFAULT_PHASE_PROFILES["post_gate"]
+        assert profile.directional_target == (13, 9)
 
     def test_maku_interaction_allows_maku_rewards(self):
         profile = DEFAULT_PHASE_PROFILES["maku_interaction"]
@@ -260,13 +347,13 @@ class TestDefaultProfileBackwardCompat:
         assert profile.loiter_penalties.get(2, 0) == 0
 
     def test_post_key_directional_target_dungeon1(self):
-        """After key: directional target at (10, 4) for Dungeon 1."""
+        """After key: directional target at (9, 6) for Dungeon 1 entrance."""
         profile = DEFAULT_PHASE_PROFILES["post_key"]
-        assert profile.directional_target == (10, 4)
+        assert profile.directional_target == (9, 6)
 
-    def test_pre_maku_directional_target_maku_tree(self):
+    def test_pre_maku_directional_target_maku_gate(self):
         profile = DEFAULT_PHASE_PROFILES["pre_maku"]
-        assert profile.directional_target == (5, 12)
+        assert profile.directional_target == (13, 9)
 
     def test_dungeon_no_directional_target(self):
         profile = DEFAULT_PHASE_PROFILES["dungeon"]
@@ -445,10 +532,15 @@ class TestCoverageRewardCap:
         profile = DEFAULT_PHASE_PROFILES["pre_sword"]
         assert profile.coverage_reward_cap == 2000.0
 
-    def test_post_key_no_cap(self):
-        """After Gnarled Key, exploration should be unlimited."""
+    def test_post_gate_zero_cap(self):
+        """After gate slash, coverage is zero to force Maku Tree entry."""
+        profile = DEFAULT_PHASE_PROFILES["post_gate"]
+        assert profile.coverage_reward_cap == 0.0
+
+    def test_post_key_coverage_desert(self):
+        """After Gnarled Key, coverage is zero — forces directional navigation."""
         profile = DEFAULT_PHASE_PROFILES["post_key"]
-        assert profile.coverage_reward_cap is None
+        assert profile.coverage_reward_cap == 0.0
 
     def test_maku_interaction_no_cap(self):
         profile = DEFAULT_PHASE_PROFILES["maku_interaction"]
@@ -462,7 +554,7 @@ class TestCoverageRewardCap:
         """PhaseManager deep-copies cap values from default profiles."""
         manager = PhaseManager()
         assert manager._profiles["pre_maku"].coverage_reward_cap == 2000.0
-        assert manager._profiles["post_key"].coverage_reward_cap is None
+        assert manager._profiles["post_key"].coverage_reward_cap == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +570,94 @@ class TestEpisodePhases:
 
     def test_phase_order(self):
         assert EPISODE_PHASES.index("pre_sword") < EPISODE_PHASES.index("pre_maku")
-        assert EPISODE_PHASES.index("pre_maku") < EPISODE_PHASES.index("maku_interaction")
+        assert EPISODE_PHASES.index("pre_maku") < EPISODE_PHASES.index("post_gate")
+        assert EPISODE_PHASES.index("post_gate") < EPISODE_PHASES.index("maku_interaction")
         assert EPISODE_PHASES.index("maku_interaction") < EPISODE_PHASES.index("post_key")
         assert EPISODE_PHASES.index("post_key") < EPISODE_PHASES.index("snow_region")
         assert EPISODE_PHASES.index("snow_region") < EPISODE_PHASES.index("dungeon")
+
+
+# ---------------------------------------------------------------------------
+# Baseline gate-slash detection (v23 fix)
+# ---------------------------------------------------------------------------
+
+class TestBaselineGateSlash:
+    """Verify phase detection handles gate_slashed from save state baseline."""
+
+    def test_baseline_gate_slashed_returns_post_gate(self):
+        """Starting from a save state with gate already slashed."""
+        phase = detect_episode_phase(
+            sword_level=1,
+            has_gnarled_key=False,
+            active_group=0,
+            entered_snow_region=False,
+            baseline_sword=1,
+            gate_slashed=True,  # baseline detected at reset
+        )
+        assert phase == "post_gate"
+
+    def test_baseline_gate_and_key_returns_post_key(self):
+        """Save state with both gate slashed and gnarled key."""
+        phase = detect_episode_phase(
+            sword_level=1,
+            has_gnarled_key=True,
+            active_group=0,
+            entered_snow_region=False,
+            baseline_sword=1,
+            baseline_gnarled_key=True,
+            gate_slashed=True,
+        )
+        assert phase == "post_key"
+
+    def test_phase_manager_reset_with_baseline_gate(self):
+        """PhaseManager.reset() with gate_slashed=True starts in post_gate."""
+        mgr = PhaseManager()
+        phase = mgr.reset(
+            sword_level=1,
+            has_gnarled_key=False,
+            active_group=0,
+            baseline_sword=1,
+            gate_slashed=True,
+        )
+        assert phase == "post_gate"
+        assert mgr.current_phase == "post_gate"
+
+    def test_baseline_gate_post_gate_coverage_cap_zero(self):
+        """post_gate phase should have coverage_reward_cap=0."""
+        profile = DEFAULT_PHASE_PROFILES["post_gate"]
+        assert profile.coverage_reward_cap == 0.0
+
+    def test_baseline_gate_and_key_no_maku_suppression(self):
+        """post_key phase suppresses maku rewards (already got key)."""
+        profile = DEFAULT_PHASE_PROFILES["post_key"]
+        assert "maku_tree_visit" in profile.suppressed
+        assert "maku_room" in profile.suppressed
+
+    def test_forward_only_phase_from_gnarled_key_save(self):
+        """From gnarled_key save state, phase should be post_key,
+        then transition to snow_region on overworld room detection."""
+        mgr = PhaseManager()
+        phase = mgr.reset(
+            sword_level=1,
+            has_gnarled_key=True,
+            active_group=2,  # starts inside Maku Tree
+            baseline_sword=1,
+            baseline_gnarled_key=True,
+            gate_slashed=True,
+        )
+        # Has key → post_key even inside Maku Tree (key check before group)
+        assert phase == "post_key"
+
+        # Enter snow region
+        changed = mgr.update_phase(
+            sword_level=1,
+            has_gnarled_key=True,
+            active_group=0,
+            entered_snow_region=True,
+            baseline_sword=1,
+            baseline_gnarled_key=True,
+            gate_slashed=True,
+            step=500,
+        )
+        assert changed
+        assert mgr.current_phase == "snow_region"

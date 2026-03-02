@@ -43,6 +43,8 @@ let ws = null;
 let trailStream = []; // Queued trail positions (rate-limited processing)
 let totalReceived = 0;
 let statusEl;
+let epochOverlayEl;
+let epochReasonEl;
 
 // Latest cursor position per env_id — updated IMMEDIATELY on WebSocket
 // message arrival, bypassing the rate-limited trail queue entirely.
@@ -62,6 +64,8 @@ async function init() {
 
   document.getElementById("app").appendChild(app.canvas);
   statusEl = document.getElementById("status");
+  epochOverlayEl = document.getElementById("epoch-overlay");
+  epochReasonEl = document.getElementById("epoch-reason");
 
   // Preload assets
   await Assets.load([
@@ -100,6 +104,13 @@ function connectWebSocket() {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+
+        // Handle system status messages (epoch review notifications)
+        if (data.name === "status") {
+          handleStatusMessage(data);
+          return;
+        }
+
         if (data.pos_data && Array.isArray(data.pos_data)) {
           const meta = data.metadata || {};
           const envId = meta.env_id ?? "unknown";
@@ -234,6 +245,26 @@ function processDataStream() {
 function updateStatus(text) {
   if (statusEl) {
     statusEl.textContent = text;
+  }
+}
+
+/**
+ * Handle status messages from the relay server.
+ * Shows an overlay during epoch review; hides it when agents reconnect.
+ */
+function handleStatusMessage(data) {
+  if (data.state === "epoch_review") {
+    if (epochReasonEl && data.reason) {
+      epochReasonEl.textContent = data.reason;
+    }
+    if (epochOverlayEl) {
+      epochOverlayEl.classList.remove("hidden");
+    }
+    updateStatus("Epoch review in progress…");
+  } else if (data.state === "active") {
+    if (epochOverlayEl) {
+      epochOverlayEl.classList.add("hidden");
+    }
   }
 }
 

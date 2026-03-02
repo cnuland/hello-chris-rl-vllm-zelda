@@ -3,3 +3,66 @@ body {
   background: #111;
   overflow: hidden;
 }
+
+/* ── Epoch-review overlay ────────────────────────────────────── */
+
+#epoch-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 90; /* below info-bar (100), above canvas */
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;            /* let pan/zoom pass through */
+  transition: opacity 0.4s ease;
+  opacity: 1;
+}
+
+#epoch-overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.epoch-overlay-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 32px 48px;
+  border-radius: 12px;
+  background: rgba(17, 17, 17, 0.85);
+  border: 1px solid rgba(102, 170, 102, 0.35);
+  box-shadow: 0 0 40px rgba(102, 170, 102, 0.12);
+}
+
+.epoch-title {
+  font-family: monospace;
+  font-size: 20px;
+  font-weight: bold;
+  color: #6a6;
+  letter-spacing: 0.5px;
+}
+
+.epoch-reason {
+  font-family: monospace;
+  font-size: 13px;
+  color: #999;
+  text-align: center;
+  max-width: 340px;
+}
+
+/* Rotating ring spinner */
+.epoch-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(102, 170, 102, 0.2);
+  border-top-color: #6a6;
+  border-radius: 50%;
+  animation: epoch-spin 1s linear infinite;
+}
+
+@keyframes epoch-spin {
+  to { transform: rotate(360deg); }
+}
