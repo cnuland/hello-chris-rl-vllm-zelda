@@ -88,6 +88,20 @@ _KEYS_JUST_PRESSED = 0xC482  # wKeysJustPressed (buttons pressed this frame)
 _LCDC = 0xFF40               # LCD Control register (bit 7 = LCD enable)
 _GAME_STATE = 0xC2EE         # wGameState (2 = normal gameplay)
 
+# --- Inventory management (auto-equip seeds) ---
+_A_BUTTON_ITEM = 0xC681      # wInventoryA (item ID on A button)
+_B_BUTTON_ITEM = 0xC680      # wInventoryB (item ID on B button)
+_INVENTORY_STORAGE = 0xC682  # wInventoryStorage (16-byte grid)
+_SEED_SATCHEL_LEVEL = 0xC6AE # wSeedSatchelLevel (0=don't have, 1+=have)
+_SATCHEL_SELECTED_SEED = 0xC6BE  # wSatchelSelectedSeeds (0=ember)
+_EMBER_SEEDS = 0xC6B5        # wNumEmberSeeds
+
+# Item type IDs (from oracles-disasm constants/common/items.s)
+_ITEMID_NONE = 0x00
+_ITEMID_BOMB = 0x03
+_ITEMID_SWORD = 0x05
+_ITEMID_SEED_SATCHEL = 0x19
+
 # Room collision data — populated per-room, 16 cols × 12 rows = 192 bytes
 _ROOM_COLLISIONS = 0xCE00
 _ACTIVE_TILE_TYPE = 0xCCB6
@@ -590,6 +604,10 @@ class ZeldaEnv(gym.Env):
         # Force-release SELECT to prevent spamming
         self._release_select()
 
+        # Auto-equip seed satchel if save state has seeds but
+        # satchel isn't equipped (agent can't open inventory menu)
+        self._auto_equip_satchel()
+
         self.step_count = 0
         self.episode_count += 1
         self._initial_deaths = self._read16(_DEATH_COUNT)
@@ -601,6 +619,39 @@ class ZeldaEnv(gym.Env):
         self._last_valid_obs = obs.copy()
         info = self._get_info()
         return obs, info
+
+    def _auto_equip_satchel(self) -> None:
+        """Auto-equip seed satchel when seeds are obtained.
+
+        The agent has START/SELECT suppressed (to reduce action space),
+        so it cannot manage inventory.  When the seed satchel is obtained
+        inside a dungeon but isn't equipped, swap it onto the A button
+        and move whatever was there (usually bombs) to the inventory grid.
+        """
+        # Only act if the agent actually has the satchel item
+        if self._pyboy.memory[_SEED_SATCHEL_LEVEL] == 0:
+            return
+
+        a_item = self._pyboy.memory[_A_BUTTON_ITEM]
+        b_item = self._pyboy.memory[_B_BUTTON_ITEM]
+
+        # Already equipped — nothing to do
+        if a_item == _ITEMID_SEED_SATCHEL or b_item == _ITEMID_SEED_SATCHEL:
+            return
+
+        # Move current A-button item to first free inventory grid slot
+        if a_item != _ITEMID_NONE:
+            for i in range(16):
+                if self._pyboy.memory[_INVENTORY_STORAGE + i] == _ITEMID_NONE:
+                    self._pyboy.memory[_INVENTORY_STORAGE + i] = a_item
+                    break
+
+        # Equip seed satchel on A button
+        self._pyboy.memory[_A_BUTTON_ITEM] = _ITEMID_SEED_SATCHEL
+
+        # Default to ember seeds (index 0)
+        self._pyboy.memory[_SATCHEL_SELECTED_SEED] = 0x00
+        logger.debug("Auto-equipped seed satchel on A button")
 
     def _dismiss_menu(self) -> None:
         """Auto-dismiss menu via direct RAM write (avoids registering START input)."""
@@ -662,6 +713,9 @@ class ZeldaEnv(gym.Env):
             self._pyboy.memory[_KEYS_JUST_PRESSED] &= ~0x0C
             if self._pyboy.memory[_MENU_STATE] != 0:
                 self._pyboy.memory[_MENU_STATE] = 0
+
+        # Auto-equip seed satchel when obtained (agent can't open menus)
+        self._auto_equip_satchel()
 
         self._last_movement = move_act
         self._last_button = btn_act

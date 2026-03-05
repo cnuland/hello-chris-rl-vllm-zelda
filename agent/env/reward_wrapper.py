@@ -165,13 +165,19 @@ class RewardWrapper(gym.Wrapper):
             self._phase_manager.merge_advisor_overrides(phase_name, overrides)
 
         # Snow region milestone — massive one-time bonus for reaching the
-        # snowy northwest area (path to Dungeon 1 / Gnarled Root).
+        # D1 corridor (northbound route to Gnarled Root Dungeon).
+        # Tightened from the entire northwest quadrant to rows 9-11, cols 6-7
+        # to prevent rewarding westward movement toward Hero's Cave.
         # Only fires after Gnarled Key is obtained.
         self._snow_region_bonus = cfg.get("snow_region", 0.0)
+        self._snow_region_min_row = int(cfg.get("snow_region_min_row",
+                                                 os.getenv("SNOW_REGION_MIN_ROW", "9")))
         self._snow_region_max_row = int(cfg.get("snow_region_max_row",
                                                  os.getenv("SNOW_REGION_MAX_ROW", "11")))
+        self._snow_region_min_col = int(cfg.get("snow_region_min_col",
+                                                 os.getenv("SNOW_REGION_MIN_COL", "6")))
         self._snow_region_max_col = int(cfg.get("snow_region_max_col",
-                                                 os.getenv("SNOW_REGION_MAX_COL", "8")))
+                                                 os.getenv("SNOW_REGION_MAX_COL", "7")))
         self._entered_snow_region = False
 
         # Structured directives from the LLM reward advisor — processed as
@@ -256,6 +262,7 @@ class RewardWrapper(gym.Wrapper):
         self._prev_sword = 0
         self._prev_essences = 0
         self._prev_group = 0
+        self._prev_dungeon_index = 0xFF
         self._prev_dungeon_floor = 0
         self._epoch = epoch
         self._episode_id = ""
@@ -412,6 +419,7 @@ class RewardWrapper(gym.Wrapper):
         # Snapshot baseline state from actual RAM
         self._prev_health = info.get("health", 0)
         self._prev_group = info.get("active_group", 0)
+        self._prev_dungeon_index = info.get("dungeon_index", 0xFF)
         self._prev_dungeon_floor = info.get("dungeon_floor", 0)
         if hasattr(self.env, "_read"):
             self._prev_keys = self.env._read(DUNGEON_KEYS)
@@ -537,6 +545,7 @@ class RewardWrapper(gym.Wrapper):
             baseline_sword=self._baseline_sword,
             baseline_gnarled_key=self._baseline_gnarled_key,
             gate_slashed=self._gate_slashed,
+            dungeon_index=self._prev_dungeon_index,
         )
         profile = self._phase_manager.active_profile
         if profile.directional_target is not None:
@@ -661,8 +670,12 @@ class RewardWrapper(gym.Wrapper):
             essences = bin(self.env._read(ESSENCES_COLLECTED)).count("1")
             self._milestone_essences = max(self._milestone_essences, essences)
         dungeon_index = info.get("dungeon_index", 0xFF)
+        # Only count REAL dungeon entries (1 <= index < 0xFF).
+        # Hero's Cave stays at dungeon_index=0xFF (never 0 as docs suggest).
+        # 0xFF also appears on the first few frames of ANY dungeon transition
+        # before the RAM settles, so excluding 0xFF prevents false positives.
         if (active_group in (4, 5) and self._baseline_group not in (4, 5)
-                and dungeon_index != 0xFF):
+                and 1 <= dungeon_index < 0xFF):
             self._milestone_entered_dungeon = True
         if active_group == 2 and self._baseline_group != 2:
             self._milestone_visited_maku_tree = True
@@ -705,6 +718,13 @@ class RewardWrapper(gym.Wrapper):
         info["baseline_has_maku_seed"] = float(self._baseline_maku_seed)
         info["baseline_maku_stage"] = float(self._baseline_maku_stage)
         info["baseline_in_maku"] = float(self._baseline_group == 2)
+        start_row = self._start_room_id // 16
+        start_col = self._start_room_id % 16
+        info["baseline_in_snow_region"] = float(
+            self._baseline_group == 0
+            and self._snow_region_min_row <= start_row <= self._snow_region_max_row
+            and self._snow_region_min_col <= start_col <= self._snow_region_max_col
+        )
         info["baseline_in_dungeon"] = float(self._baseline_group in (4, 5))
         info["baseline_gate_slashed"] = float(self._baseline_gate_slashed)
 
@@ -753,6 +773,7 @@ class RewardWrapper(gym.Wrapper):
         # --- Progression rewards ---
         active_group = info.get("active_group", 0)
         dungeon_floor = info.get("dungeon_floor", 0)
+        room_id = info.get("room_id", 0)
         group_changed = active_group != self._prev_group
 
         # Post-Gnarled-Key reward gating: once the agent has the key,
@@ -764,12 +785,18 @@ class RewardWrapper(gym.Wrapper):
                 self.env._read(GNARLED_KEY_OBTAINED) & GNARLED_KEY_OBTAINED_MASK
             )
 
-        # Dungeon entry bonus — ONE-TIME per episode, real dungeons only
-        # dungeon_index=0xFF means overworld/cave (e.g. Great Fairy Cave),
-        # 0=Gnarled Root (D1), 1=Snake's Remains (D2), etc.
+        # Dungeon entry bonus — ONE-TIME per episode, real dungeons only.
+        # dungeon_index: 0xFF=not in dungeon / Hero's Cave, 1=Gnarled Root
+        # (D1), 2=Snake's Remains (D2), ...
+        # We require 1 <= index < 0xFF to exclude both Hero's Cave (stays at
+        # 0xFF) and the transient 0xFF frames when entering a real dungeon.
+        # Uses _baseline_group (not _prev_group) because dungeon_index RAM
+        # update lags active_group by a few frames — on the exact transition
+        # frame, dungeon_index is still 0xFF.  Checking baseline + one-time
+        # flag ensures we catch it once dungeon_index settles to 1..7.
         dungeon_idx = info.get("dungeon_index", 0xFF)
-        if (active_group in (4, 5) and self._prev_group not in (4, 5)
-                and dungeon_idx != 0xFF
+        if (active_group in (4, 5) and self._baseline_group not in (4, 5)
+                and 1 <= dungeon_idx < 0xFF
                 and not self._rewarded_dungeon_entry):
             self._rewarded_dungeon_entry = True
             reward += self._dungeon_entry_bonus
@@ -802,9 +829,9 @@ class RewardWrapper(gym.Wrapper):
             reward += self._indoor_entry_bonus
             self._acc_indoor_entry += self._indoor_entry_bonus
 
-        # Dungeon floor change bonus (real dungeons only)
+        # Dungeon floor change bonus (real dungeons only, exclude Hero's Cave)
         if (dungeon_floor != self._prev_dungeon_floor
-                and active_group in (4, 5) and dungeon_idx != 0xFF):
+                and active_group in (4, 5) and 1 <= dungeon_idx < 0xFF):
             reward += self._dungeon_floor_bonus
 
         self._prev_group = active_group
@@ -985,8 +1012,9 @@ class RewardWrapper(gym.Wrapper):
                 self._acc_loiter -= self._maku_loiter_penalty
 
         # --- Snow region milestone (post-Gnarled-Key) ---
-        # Massive one-time bonus for reaching the snowy northwest area,
-        # which is on the path to Dungeon 1 / Gnarled Root.
+        # One-time bonus for reaching the D1 corridor (rows 9-11, cols 6-7).
+        # Tightened from entire northwest quadrant to prevent rewarding
+        # westward movement toward Hero's Cave.
         if (has_gnarled_key_now
                 and self._snow_region_bonus > 0
                 and not self._entered_snow_region
@@ -994,7 +1022,8 @@ class RewardWrapper(gym.Wrapper):
             room_id = info.get("room_id", 0)
             cur_row = room_id // 16
             cur_col = room_id % 16
-            if cur_row <= self._snow_region_max_row and cur_col <= self._snow_region_max_col:
+            if (self._snow_region_min_row <= cur_row <= self._snow_region_max_row
+                    and self._snow_region_min_col <= cur_col <= self._snow_region_max_col):
                 self._entered_snow_region = True
                 self._milestone_entered_snow_region = True
                 self._milestone_achieved_this_step = True
@@ -1021,6 +1050,7 @@ class RewardWrapper(gym.Wrapper):
                 baseline_gnarled_key=self._baseline_gnarled_key,
                 step=info.get("step", 0),
                 gate_slashed=self._gate_slashed,
+                dungeon_index=info.get("dungeon_index", 0xFF),
             )
             if phase_changed:
                 profile = self._phase_manager.active_profile

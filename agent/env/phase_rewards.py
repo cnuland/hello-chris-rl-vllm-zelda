@@ -184,6 +184,7 @@ def detect_episode_phase(
     baseline_sword: int = 0,
     baseline_gnarled_key: bool = False,
     gate_slashed: bool = False,
+    dungeon_index: int = 0xFF,
 ) -> str:
     """Detect the current game phase from live RAM state.
 
@@ -200,12 +201,15 @@ def detect_episode_phase(
         baseline_sword: Sword level at episode start (from save state).
         baseline_gnarled_key: Whether the save state already had the key.
         gate_slashed: Whether the Maku Tree gate has been slashed this episode.
+        dungeon_index: Current DUNGEON_INDEX RAM value. 0=Hero's Cave,
+            1=Gnarled Root (D1), 2+=later dungeons, 0xFF=not in dungeon.
 
     Returns:
         Phase string from EPISODE_PHASES.
     """
-    # Dungeon takes priority — if we're in a dungeon, we're in dungeon phase
-    if active_group in (4, 5):
+    # Dungeon takes priority — but only REAL dungeons (1 <= index < 0xFF).
+    # Hero's Cave stays at dungeon_index=0xFF, same as "not in dungeon".
+    if active_group in (4, 5) and 1 <= dungeon_index < 0xFF:
         return "dungeon"
 
     # Check Gnarled Key (from current RAM or save state baseline)
@@ -290,6 +294,7 @@ class PhaseManager:
         baseline_sword: int = 0,
         baseline_gnarled_key: bool = False,
         gate_slashed: bool = False,
+        dungeon_index: int = 0xFF,
     ) -> str:
         """Detect initial phase at episode start.
 
@@ -304,6 +309,7 @@ class PhaseManager:
             baseline_sword=baseline_sword,
             baseline_gnarled_key=baseline_gnarled_key,
             gate_slashed=gate_slashed,
+            dungeon_index=dungeon_index,
         )
         self._phase_history = [(self._current_phase, 0)]
         self._logged_transitions.clear()
@@ -320,6 +326,7 @@ class PhaseManager:
         baseline_gnarled_key: bool = False,
         step: int = 0,
         gate_slashed: bool = False,
+        dungeon_index: int = 0xFF,
     ) -> bool:
         """Re-detect phase after a milestone event.
 
@@ -334,6 +341,7 @@ class PhaseManager:
             baseline_sword=baseline_sword,
             baseline_gnarled_key=baseline_gnarled_key,
             gate_slashed=gate_slashed,
+            dungeon_index=dungeon_index,
         )
         if new_phase != self._current_phase:
             old_phase = self._current_phase

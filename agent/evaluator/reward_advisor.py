@@ -447,6 +447,8 @@ class RewardAdvisor:
             parts.append(f"    Max Rooms Explored: {milestones.get('max_rooms', 0)}")
             parts.append(f"    Max Tiles Explored: {milestones.get('max_tiles', 0)}")
             parts.append(f"    Max Maku Rooms: {milestones.get('max_maku_rooms', 0)}")
+            parts.append(f"    Max Dungeon Keys: {milestones.get('max_dungeon_keys', 0)}")
+            parts.append(f"    Max Dungeon Floor: {milestones.get('max_dungeon_floor', 0)}")
         parts.append("")
 
         # Segment summaries
@@ -520,6 +522,26 @@ class RewardAdvisor:
                 "overworld exploration\n"
                 "- The path is: EXIT Maku Tree → go WEST → then NORTH to snowy region\n"
                 "- Dungeon 1 entrance is at approximately (row=10, col=4) on the overworld"
+            )
+        elif phase == "dungeon":
+            parts.append(
+                "\n\nPHASE-SPECIFIC NOTES (dungeon):\n"
+                "The agent has ENTERED a dungeon (active_group 4-5, dungeon_index >= 1). "
+                "This is Dungeon 1 (Gnarled Root) — a puzzle-based level. The overworld "
+                "navigation policy is strong; the challenge is now PUZZLE SOLVING.\n\n"
+                "Dungeon 1 layout: ~15 rooms across 1 floor. Puzzles include:\n"
+                "- Finding small keys to unlock locked doors\n"
+                "- Pushing blocks to create paths or reveal passages\n"
+                "- Defeating a mini-boss (two Stalfos) for a drop\n"
+                "- Finding the Boss Key to unlock the boss room\n"
+                "- Navigating to and defeating the boss (Aquamentus)\n\n"
+                "Focus your advice on:\n"
+                "- Increasing dungeon_floor_bonus if agent hasn't progressed floors\n"
+                "- Increasing key_scale if agent hasn't collected keys\n"
+                "- Adding seek_room directives for dungeon area groups (4, 5)\n"
+                "- Setting puzzle weight_adjustment high (0.30-0.40)\n"
+                "- Keeping directional_target as null (no spatial guidance inside dungeons)\n"
+                "- The agent should explore new dungeon rooms and interact with objects"
             )
 
         return "\n".join(parts)

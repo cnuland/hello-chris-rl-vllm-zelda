@@ -6,14 +6,23 @@ this to generate phase-appropriate judge prompts, rubric weights, and
 directional targets.
 
 Phases follow the Oracle of Seasons quest progression:
-  pre_sword → pre_maku → maku_interaction → pre_dungeon → dungeon
+  pre_sword → pre_maku → maku_interaction → post_key → snow_region
+  → pre_dungeon → dungeon
 """
 
 from __future__ import annotations
 
 import os
 
-PHASES = ["pre_sword", "pre_maku", "maku_interaction", "pre_dungeon", "dungeon"]
+PHASES = [
+    "pre_sword",
+    "pre_maku",
+    "maku_interaction",
+    "post_key",
+    "snow_region",
+    "pre_dungeon",
+    "dungeon",
+]
 
 # Human-readable descriptions included in LLM judge/advisor prompts so
 # the models understand what the agent is currently trying to accomplish.
@@ -43,6 +52,20 @@ PHASE_DESCRIPTIONS: dict[str, str] = {
         "DIALOG IS THE MOST IMPORTANT ACTION at this stage. Good behavior: "
         "staying in group 2, triggering dialog, interacting with objects."
     ),
+    "post_key": (
+        "The agent has the Gnarled Key from the Maku Tree dialog and needs "
+        "to travel WEST toward the snowy/wooded region. The agent should "
+        "exit the Maku Tree area and begin heading west across the overworld. "
+        "Good behavior: leaving group 2, decreasing room column, discovering "
+        "new rooms to the west."
+    ),
+    "snow_region": (
+        "The agent has reached the snowy/western region of the overworld "
+        "(approximately row <= 11, col <= 8). Dungeon 1 (Gnarled Root) is "
+        "nearby. The agent needs to find the dungeon entrance and enter it. "
+        "Good behavior: exploring the western overworld, finding cave "
+        "entrances, entering active_group 4 or 5 (dungeon areas)."
+    ),
     "pre_dungeon": (
         "The agent has the Gnarled Key quest from the Maku Tree and needs "
         "to travel WEST to find Dungeon 1 (Gnarled Root). The dungeon "
@@ -65,6 +88,8 @@ PHASE_DIRECTIONAL_TARGETS: dict[str, tuple[int, int] | None] = {
     "pre_sword": (14, 8),     # Hero's Cave area (south of village)
     "pre_maku": (5, 12),      # Maku Tree path (northeast)
     "maku_interaction": (5, 12),  # Stay at Maku Tree
+    "post_key": (9, 6),       # Head west toward snow region
+    "snow_region": (9, 6),    # Dungeon 1 area
     "pre_dungeon": (10, 4),   # Dungeon 1 entrance (west)
     "dungeon": None,          # No directional target inside dungeons
 }
@@ -113,11 +138,15 @@ def detect_phase(milestones: dict) -> str:
     baseline_sword = milestones.get("baseline_has_sword", False)
     baseline_maku_visit = milestones.get("baseline_in_maku", False)
     baseline_maku_dialog = milestones.get("baseline_has_maku_dialog", False)
+    baseline_gnarled_key = milestones.get("baseline_has_gnarled_key", False)
+    baseline_snow_region = milestones.get("baseline_in_snow_region", False)
     baseline_dungeon = milestones.get("baseline_in_dungeon", False)
 
     got_sword_pct = 100.0 * milestones.get("total_got_sword", 0) / total_eps
     visited_maku_pct = 100.0 * milestones.get("total_visited_maku_tree", 0) / total_eps
     maku_dialog_pct = 100.0 * milestones.get("total_maku_dialog", 0) / total_eps
+    gnarled_key_pct = 100.0 * milestones.get("total_gnarled_key", 0) / total_eps
+    snow_region_pct = 100.0 * milestones.get("total_entered_snow_region", 0) / total_eps
     entered_dungeon_pct = 100.0 * milestones.get("total_entered_dungeon", 0) / total_eps
 
     if not baseline_sword and got_sword_pct < 60:
@@ -126,6 +155,10 @@ def detect_phase(milestones: dict) -> str:
         return "pre_maku"
     if not baseline_maku_dialog and maku_dialog_pct < 30:
         return "maku_interaction"
+    if not baseline_gnarled_key and gnarled_key_pct < 30:
+        return "post_key"
+    if not baseline_snow_region and snow_region_pct < 30:
+        return "snow_region"
     if not baseline_dungeon and entered_dungeon_pct < 30:
         return "pre_dungeon"
     return "dungeon"

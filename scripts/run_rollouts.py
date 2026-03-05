@@ -191,10 +191,14 @@ def cleanup_after_epoch(epoch: int, global_best_checkpoint: str):
         s3 = S3Client(S3Config())
 
         # 1. Clean episode recordings for this epoch (already evaluated)
-        ep_prefix = f"epoch_{epoch}/"
-        deleted = s3.delete_all_objects("zelda-episodes", prefix=ep_prefix)
-        if deleted:
-            logger.info("Cleaned %d episode objects for epoch %d", deleted, epoch)
+        keep_episodes = os.environ.get("KEEP_EPISODES", "false").lower() == "true"
+        if keep_episodes:
+            logger.info("KEEP_EPISODES=true — skipping episode cleanup for epoch %d", epoch)
+        else:
+            ep_prefix = f"epoch_{epoch}/"
+            deleted = s3.delete_all_objects("zelda-episodes", prefix=ep_prefix)
+            if deleted:
+                logger.info("Cleaned %d episode objects for epoch %d", deleted, epoch)
 
         # 2. Clean old checkpoint data from zelda-models.
         # Both Ray and PufferLib store checkpoints under their own prefix:
@@ -732,10 +736,15 @@ def run_reward_advisor(
             lines = scores_data.decode().strip().split("\n")
             for line in lines[:5]:
                 seg = json.loads(line)
+                # Detect area from segment state data
+                seg_group = seg.get("active_group", 0)
+                area = {0: "overworld", 1: "subrosia", 2: "maku_tree", 3: "indoors"}.get(
+                    seg_group, "dungeon"
+                )
                 summary: dict[str, Any] = {
                     "rooms": seg.get("scores", {}).get("progress", 0),
                     "dialog_count": seg.get("scores", {}).get("dialog", 0),
-                    "area": "overworld",
+                    "area": area,
                     "total_reward": seg.get("weighted_score", 0),
                     "scores": seg.get("scores", {}),
                 }

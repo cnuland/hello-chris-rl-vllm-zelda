@@ -483,6 +483,7 @@ def run_training_epoch(
         "max_maku_rooms": 0,
         "max_essences": 0,
         "max_dungeon_keys": 0,
+        "max_dungeon_floor": 0,
         # Save-state baseline — what the agent already has at episode start.
         # Captured once from the first completed episode (same for all episodes
         # since they share the same save state).  Used by the phase detector
@@ -493,6 +494,7 @@ def run_training_epoch(
         "baseline_has_maku_seed": False,
         "baseline_maku_stage": 0,
         "baseline_in_maku": False,
+        "baseline_in_snow_region": False,
         "baseline_in_dungeon": False,
         "baseline_captured": False,
     }
@@ -624,6 +626,10 @@ def run_training_epoch(
                             milestones["max_dungeon_keys"],
                             int(env_info.get("milestone_dungeon_keys", 0)),
                         )
+                        milestones["max_dungeon_floor"] = max(
+                            milestones["max_dungeon_floor"],
+                            int(env_info.get("dungeon_floor", 0)),
+                        )
 
                         # Capture save-state baseline once (identical for all
                         # episodes since they share the same save state).
@@ -645,6 +651,9 @@ def run_training_epoch(
                             )
                             milestones["baseline_in_maku"] = bool(
                                 env_info.get("baseline_in_maku", 0)
+                            )
+                            milestones["baseline_in_snow_region"] = bool(
+                                env_info.get("baseline_in_snow_region", 0)
                             )
                             milestones["baseline_in_dungeon"] = bool(
                                 env_info.get("baseline_in_dungeon", 0)
@@ -949,6 +958,7 @@ def run_training_epoch(
     logger.info("  Entered dungeon:      %d/%d episodes", milestones["total_entered_dungeon"], n_eps)
     logger.info("  Max essences:         %d", milestones["max_essences"])
     logger.info("  Max dungeon keys:     %d", milestones["max_dungeon_keys"])
+    logger.info("  Max dungeon floor:    %d", milestones["max_dungeon_floor"])
 
     # Cleanup
     vecenv.close()

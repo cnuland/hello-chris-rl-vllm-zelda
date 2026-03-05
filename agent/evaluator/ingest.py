@@ -69,6 +69,20 @@ PHASE_WEIGHTS: dict[str, dict[str, float]] = {
         "efficiency": 0.15,
         "puzzle": 0.15,
     },
+    "post_key": {
+        "progress": 0.35,
+        "novelty": 0.25,
+        "dialog": 0.05,
+        "efficiency": 0.25,
+        "puzzle": 0.10,
+    },
+    "snow_region": {
+        "progress": 0.30,
+        "novelty": 0.20,
+        "dialog": 0.05,
+        "efficiency": 0.30,
+        "puzzle": 0.15,
+    },
     "pre_dungeon": {
         "progress": 0.35,
         "novelty": 0.25,
@@ -166,6 +180,48 @@ PHASE_PROMPTS: dict[str, dict[str, str]] = {
             "approaches the tree NPC. Score low if leaving and re-entering. "
             "DIALOG: Score VERY HIGHLY (0.8-1.0) if ANY frame shows a dialog "
             "box on screen — this is THE critical objective at this phase."
+        ),
+    },
+    "post_key": {
+        "state": (
+            "The agent has the Gnarled Key from Maku Tree dialog and needs "
+            "to travel WEST. Good progress: leaving group 2, decreasing "
+            "room column number, exploring western overworld rooms."
+        ),
+        "puzzle": (
+            "Overworld puzzles at this stage involve cutting bushes, pushing "
+            "rocks, and navigating around obstacles to head west toward the "
+            "snowy region. Score progress-enabling interactions."
+        ),
+        "vision": (
+            "POST-KEY TRAVEL — the agent has the key and must head west. "
+            "PROGRESS: Score highly if frames show westward overworld travel "
+            "through new screens. Score low if the agent stays at the Maku Tree. "
+            "NOVELTY: Score for new western areas and terrain changes. "
+            "EFFICIENCY: Score for clear westward movement. Score low for "
+            "circling near the Maku Tree. "
+            "DIALOG: Score only if dialog boxes appear on screen."
+        ),
+    },
+    "snow_region": {
+        "state": (
+            "The agent has reached the western/snowy overworld region near "
+            "Dungeon 1. Good progress: exploring this area, finding the "
+            "dungeon entrance, entering active_group 4 or 5."
+        ),
+        "puzzle": (
+            "Near the dungeon entrance, the agent may need to solve "
+            "environmental puzzles (season changes, bush cutting). Score any "
+            "puzzle interactions that reveal the dungeon entrance."
+        ),
+        "vision": (
+            "SNOW REGION — the agent is near Dungeon 1. "
+            "PROGRESS: Score highly if frames show the snowy overworld or "
+            "dungeon entrance area. Score very highly if any frame shows "
+            "a dungeon interior. "
+            "NOVELTY: Score for dungeon entrance discovery. "
+            "EFFICIENCY: Score for purposeful exploration toward the entrance. "
+            "DIALOG: Score only if dialog boxes appear."
         ),
     },
     "pre_dungeon": {

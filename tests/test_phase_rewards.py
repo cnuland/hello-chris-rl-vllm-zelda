@@ -107,10 +107,12 @@ class TestDetectEpisodePhase:
         ) == "snow_region"
 
     def test_in_dungeon_returns_dungeon(self):
+        """Gnarled Root (dungeon_index=1) should trigger dungeon phase."""
         assert detect_episode_phase(
             sword_level=1, has_gnarled_key=True,
             active_group=4, entered_snow_region=False,
             baseline_sword=1, baseline_gnarled_key=False,
+            dungeon_index=1,
         ) == "dungeon"
 
     def test_dungeon_group_5(self):
@@ -118,6 +120,7 @@ class TestDetectEpisodePhase:
             sword_level=1, has_gnarled_key=True,
             active_group=5, entered_snow_region=True,
             baseline_sword=1, baseline_gnarled_key=False,
+            dungeon_index=1,
         ) == "dungeon"
 
     def test_dungeon_takes_priority_over_key(self):
@@ -126,7 +129,39 @@ class TestDetectEpisodePhase:
             sword_level=1, has_gnarled_key=True,
             active_group=4, entered_snow_region=True,
             baseline_sword=1, baseline_gnarled_key=True,
+            dungeon_index=1,
         ) == "dungeon"
+
+    def test_heros_cave_not_dungeon_phase(self):
+        """Hero's Cave (dungeon_index=0) should NOT trigger dungeon phase.
+        It's the tutorial sword cave, not a quest dungeon."""
+        assert detect_episode_phase(
+            sword_level=0, has_gnarled_key=False,
+            active_group=4, entered_snow_region=False,
+            baseline_sword=0, baseline_gnarled_key=False,
+            dungeon_index=0,
+        ) == "pre_sword"
+
+    def test_heros_cave_with_sword_returns_pre_maku(self):
+        """Hero's Cave with sword already obtained stays in pre_maku."""
+        assert detect_episode_phase(
+            sword_level=1, has_gnarled_key=False,
+            active_group=4, entered_snow_region=False,
+            baseline_sword=1, baseline_gnarled_key=False,
+            dungeon_index=0,
+        ) == "pre_maku"
+
+    def test_dungeon_group_with_0xff_not_dungeon_phase(self):
+        """group=4 with dungeon_index=0xFF (255) should NOT trigger dungeon.
+        Hero's Cave stays at 0xFF, and real dungeons start at 0xFF for a
+        few frames before the RAM settles.  255 >= 1 is True, so the old
+        '>= 1' check was a false positive."""
+        assert detect_episode_phase(
+            sword_level=1, has_gnarled_key=True,
+            active_group=4, entered_snow_region=True,
+            baseline_sword=1, baseline_gnarled_key=True,
+            dungeon_index=0xFF,
+        ) == "snow_region"  # falls through to snow_region, not dungeon
 
 
 # ---------------------------------------------------------------------------
