@@ -1214,6 +1214,10 @@ def main():
     if gnarled_key_bonus is not None:
         reward_overrides["gnarled_key"] = float(gnarled_key_bonus)
         logger.info("Gnarled Key bonus: %.0f", float(gnarled_key_bonus))
+    dungeon_entry_bonus = os.getenv("DUNGEON_ENTRY")
+    if dungeon_entry_bonus is not None:
+        reward_overrides["dungeon_entry"] = float(dungeon_entry_bonus)
+        logger.info("Dungeon entry bonus: %.0f", float(dungeon_entry_bonus))
     # Coverage cap — hard ceiling on per-episode exploration reward.
     # Applied globally (all phases) to prevent the agent from exploiting
     # uncapped phases (e.g., maku_interaction with 3× area boost).
