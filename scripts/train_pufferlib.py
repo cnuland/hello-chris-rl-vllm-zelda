@@ -1218,6 +1218,10 @@ def main():
     if dungeon_entry_bonus is not None:
         reward_overrides["dungeon_entry"] = float(dungeon_entry_bonus)
         logger.info("Dungeon entry bonus: %.0f", float(dungeon_entry_bonus))
+    d1_entrance_bonus = os.getenv("D1_ENTRANCE_BONUS")
+    if d1_entrance_bonus is not None:
+        reward_overrides["d1_entrance_bonus"] = float(d1_entrance_bonus)
+        logger.info("D1 entrance room bonus: %.0f", float(d1_entrance_bonus))
     # Coverage cap — hard ceiling on per-episode exploration reward.
     # Applied globally (all phases) to prevent the agent from exploiting
     # uncapped phases (e.g., maku_interaction with 3× area boost).

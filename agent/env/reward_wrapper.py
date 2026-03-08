@@ -180,6 +180,15 @@ class RewardWrapper(gym.Wrapper):
                                                  os.getenv("SNOW_REGION_MAX_COL", "7")))
         self._entered_snow_region = False
 
+        # D1 entrance room bonus — one-time reward for reaching overworld
+        # room (9,6), the last overworld room before dungeon entry.  Bridges
+        # the reward gap between the snow region bonus (+2000) and the actual
+        # dungeon entry bonus (+3000).
+        self._d1_entrance_bonus = cfg.get("d1_entrance_bonus", 0.0)
+        self._d1_entrance_room = int(cfg.get("d1_entrance_room",
+                                              os.getenv("D1_ENTRANCE_ROOM", "0x96")), 0)
+        self._reached_d1_entrance = False
+
         # Structured directives from the LLM reward advisor — processed as
         # one-time bonuses or per-step penalties based on area/action conditions.
         self._directives = cfg.get("directives", [])
@@ -275,6 +284,7 @@ class RewardWrapper(gym.Wrapper):
         self._rewarded_dungeon_entry = False
         self._rewarded_indoor_entry = False
         self._milestone_entered_snow_region = False
+        self._milestone_reached_d1_entrance = False
         self._milestone_essences = 0
         self._milestone_dungeon_keys = 0
         self._milestone_max_rooms = 0
@@ -498,6 +508,7 @@ class RewardWrapper(gym.Wrapper):
         self._rewarded_dungeon_entry = False
         self._rewarded_indoor_entry = False
         self._milestone_entered_snow_region = False
+        self._milestone_reached_d1_entrance = False
         self._milestone_essences = 0
         self._milestone_dungeon_keys = 0
         self._milestone_max_rooms = 0
@@ -519,6 +530,7 @@ class RewardWrapper(gym.Wrapper):
         self._gate_slashed = self._baseline_gate_slashed
         self._prev_gate_dist = 0.0
         self._entered_snow_region = False
+        self._reached_d1_entrance = False
         self._loiter_steps_in_group.clear()
         self._episode_total_reward = 0.0
         self._logged_breakdown = False
@@ -706,6 +718,7 @@ class RewardWrapper(gym.Wrapper):
             self._gate_slashed and not self._baseline_gate_slashed
         )
         info["milestone_entered_snow_region"] = float(self._milestone_entered_snow_region)
+        info["milestone_reached_d1_entrance"] = float(self._milestone_reached_d1_entrance)
         info["milestone_maku_rooms"] = float(len(self._maku_rooms_visited))
         info["milestone_maku_stage"] = float(
             self._prev_maku_stage > self._baseline_maku_stage
@@ -1034,6 +1047,26 @@ class RewardWrapper(gym.Wrapper):
                     cur_row, cur_col, self._snow_region_bonus,
                 )
                 self._capture_milestone_state("entered_snow_region", reward)
+
+        # --- D1 entrance room bonus (overworld only) ---
+        # One-time bonus for reaching the specific overworld room that
+        # contains the D1 dungeon entrance.  Bridges the reward gap between
+        # the snow region bonus and the actual dungeon entry transition.
+        if (self._d1_entrance_bonus > 0
+                and not self._reached_d1_entrance
+                and active_group == 0):
+            room_id = info.get("room_id", 0)
+            if room_id == self._d1_entrance_room:
+                self._reached_d1_entrance = True
+                self._milestone_reached_d1_entrance = True
+                self._milestone_achieved_this_step = True
+                self._episode_worthy = True
+                reward += self._d1_entrance_bonus
+                logger.info(
+                    "MILESTONE: Reached D1 entrance room 0x%02X! (+%.0f)",
+                    room_id, self._d1_entrance_bonus,
+                )
+                self._capture_milestone_state("reached_d1_entrance", reward)
 
         # --- Phase re-detection on milestone events OR group transitions ---
         # Re-detect when any milestone fires OR when the area group changes.
