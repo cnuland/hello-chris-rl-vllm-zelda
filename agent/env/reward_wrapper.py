@@ -1040,9 +1040,7 @@ class RewardWrapper(gym.Wrapper):
                 self._entered_snow_region = True
                 self._milestone_entered_snow_region = True
                 self._milestone_achieved_this_step = True
-                # Note: snow region does NOT set _episode_worthy — only D1
-                # entrance and dungeon entry trigger episode recording to
-                # avoid filling MinIO with ~27 GiB/epoch of snow-only episodes.
+                self._episode_worthy = True
                 reward += self._snow_region_bonus
                 logger.info(
                     "MILESTONE: Entered snow region at room (%d,%d)! (+%.0f)",
