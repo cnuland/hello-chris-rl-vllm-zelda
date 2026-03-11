@@ -1158,109 +1158,48 @@ def main():
     current_milestone: str | None = None
     original_save_state_path = save_state_path
 
-    # Initial reward config from env vars (overridden later by reward advisor)
+    # v1.1 reward config: delta-based rewards with exploration decay.
+    # All weights are small (5-30) since rewards are delta-based, not spikes.
     reward_config: dict | None = None
-    directional_bonus = float(os.getenv("DIRECTIONAL_BONUS", "0"))
-    grid_exploration = float(os.getenv("GRID_EXPLORATION", "0"))
-    new_room_bonus = float(os.getenv("NEW_ROOM_BONUS", "0"))
-    exit_seeking = float(os.getenv("EXIT_SEEKING", "0"))
-    dialog_advance = float(os.getenv("DIALOG_ADVANCE", "50"))
-    maku_loiter_penalty = float(os.getenv("MAKU_LOITER_PENALTY", "0"))
-    snow_region_bonus = float(os.getenv("SNOW_REGION_BONUS", "0"))
-    gate_slash_bonus = float(os.getenv("GATE_SLASH", "0"))
-    gate_proximity = float(os.getenv("GATE_PROXIMITY", "0"))
-    gate_tile_x = int(os.getenv("GATE_TILE_X", "5"))
-    gate_tile_y = int(os.getenv("GATE_TILE_Y", "1"))
-    reward_overrides = {}
-    if snow_region_bonus != 0:
-        reward_overrides["snow_region"] = snow_region_bonus
-        logger.info("Snow region milestone: %.0f bonus for entering snowy northwest", snow_region_bonus)
-    if maku_loiter_penalty != 0:
-        reward_overrides["maku_loiter_penalty"] = maku_loiter_penalty
-        logger.info("Maku loiter penalty: %.1f per step in group 2 after key", maku_loiter_penalty)
-    if directional_bonus != 0:
-        reward_overrides["directional_bonus"] = directional_bonus
-        logger.info("Directional bonus: %.1f per new eastward column", directional_bonus)
-    if exit_seeking != 0:
-        reward_overrides["exit_seeking"] = exit_seeking
-        logger.info("Exit seeking: %.2f per tile closer to frontier exit", exit_seeking)
-    if grid_exploration != 0:
-        reward_overrides["grid_exploration"] = grid_exploration
-        logger.info("Grid exploration: %.3f per tile step", grid_exploration)
-    if new_room_bonus != 0:
-        reward_overrides["new_room"] = new_room_bonus
-        logger.info("New room bonus: %.1f per unique room discovered", new_room_bonus)
-    if dialog_advance != 0:
-        reward_overrides["dialog_advance"] = dialog_advance
-        logger.info("Dialog advance: %.1f per A-press during dialog (cap 20/episode)", dialog_advance)
-    if gate_slash_bonus != 0:
-        reward_overrides["gate_slash"] = gate_slash_bonus
-        logger.info("Gate slash bonus: %.0f for slashing the Maku Tree gate", gate_slash_bonus)
-    if gate_proximity != 0:
-        reward_overrides["gate_proximity"] = gate_proximity
-        reward_overrides["gate_tile_x"] = gate_tile_x
-        reward_overrides["gate_tile_y"] = gate_tile_y
-        logger.info(
-            "Gate proximity shaping: %.1f scale, target tile (%d, %d) in room 0xD9",
-            gate_proximity, gate_tile_x, gate_tile_y,
-        )
-    # Maku Tree quest reward overrides — boost these to make the
-    # Maku Tree sequence competitive with exploration after gate slash.
-    maku_tree_visit = os.getenv("MAKU_TREE_VISIT")
-    if maku_tree_visit is not None:
-        reward_overrides["maku_tree_visit"] = float(maku_tree_visit)
-        logger.info("Maku Tree visit bonus: %.0f", float(maku_tree_visit))
-    gnarled_key_bonus = os.getenv("GNARLED_KEY")
-    if gnarled_key_bonus is not None:
-        reward_overrides["gnarled_key"] = float(gnarled_key_bonus)
-        logger.info("Gnarled Key bonus: %.0f", float(gnarled_key_bonus))
-    dungeon_entry_bonus = os.getenv("DUNGEON_ENTRY")
-    if dungeon_entry_bonus is not None:
-        reward_overrides["dungeon_entry"] = float(dungeon_entry_bonus)
-        logger.info("Dungeon entry bonus: %.0f", float(dungeon_entry_bonus))
-    d1_entrance_bonus = os.getenv("D1_ENTRANCE_BONUS")
-    if d1_entrance_bonus is not None:
-        reward_overrides["d1_entrance_bonus"] = float(d1_entrance_bonus)
-        logger.info("D1 entrance room bonus: %.0f", float(d1_entrance_bonus))
-    # Coverage cap — hard ceiling on per-episode exploration reward.
-    # Applied globally (all phases) to prevent the agent from exploiting
-    # uncapped phases (e.g., maku_interaction with 3× area boost).
-    coverage_cap = os.getenv("COVERAGE_CAP")
-    if coverage_cap is not None:
-        cap_val = float(coverage_cap)
-        # Global cap applies regardless of phase
-        reward_overrides["global_coverage_cap"] = cap_val
-        # Also set per-phase caps for pre_maku/pre_sword (backward compat)
-        reward_overrides.setdefault("phase_overrides", {})
-        reward_overrides["phase_overrides"]["pre_maku"] = {"coverage_reward_cap": cap_val}
-        reward_overrides["phase_overrides"]["pre_sword"] = {"coverage_reward_cap": cap_val}
-        logger.info("Coverage cap: %.0f (global + pre_maku/pre_sword phases)", cap_val)
-    # Wire maku_loiter_penalty into post_key/snow_region phase profiles
-    # so the env var controls the actual phase-driven penalty, not just
-    # the legacy fallback.
-    if maku_loiter_penalty != 0:
-        reward_overrides.setdefault("phase_overrides", {})
-        for phase in ("post_key", "snow_region"):
-            reward_overrides["phase_overrides"].setdefault(phase, {})
-            reward_overrides["phase_overrides"][phase]["loiter_penalties"] = {
-                2: maku_loiter_penalty,
-            }
-        logger.info(
-            "Maku loiter penalty wired into post_key/snow_region profiles: %.2f/step",
-            maku_loiter_penalty,
-        )
+    reward_overrides: dict[str, float] = {}
 
-    # Save env var overrides separately — these are re-applied after each
-    # advisor pass to prevent the LLM multiplier from compounding them.
+    # Event flag weights (permanent contribution to state value)
+    _env_float = lambda key, default: float(os.getenv(key, str(default)))
+    reward_overrides["gate_slash"] = _env_float("GATE_SLASH", 10.0)
+    reward_overrides["maku_tree_visit"] = _env_float("MAKU_TREE_VISIT", 5.0)
+    reward_overrides["gnarled_key"] = _env_float("GNARLED_KEY", 15.0)
+    reward_overrides["maku_dialog"] = _env_float("MAKU_DIALOG", 8.0)
+    reward_overrides["maku_seed"] = _env_float("MAKU_SEED", 25.0)
+    reward_overrides["sword"] = _env_float("SWORD_BONUS", 5.0)
+    reward_overrides["snow_region"] = _env_float("SNOW_REGION_BONUS", 10.0)
+    reward_overrides["d1_entrance_bonus"] = _env_float("D1_ENTRANCE_BONUS", 12.0)
+    reward_overrides["dungeon_entry"] = _env_float("DUNGEON_ENTRY", 20.0)
+    reward_overrides["essence"] = _env_float("ESSENCE_BONUS", 30.0)
+
+    # Exploration weights (decaying cumulative)
+    reward_overrides["grid_exploration"] = _env_float("GRID_EXPLORATION", 0.02)
+    reward_overrides["new_room"] = _env_float("NEW_ROOM_BONUS", 0.5)
+
+    # Dialog weight
+    reward_overrides["dialog_advance"] = _env_float("DIALOG_ADVANCE", 0.5)
+
+    # Directional bonus
+    reward_overrides["directional_bonus"] = _env_float("DIRECTIONAL_BONUS", 0.0)
+
+    # Exploration decay parameters
+    reward_overrides["exploration_decay"] = _env_float("EXPLORATION_DECAY", 0.9995)
+    reward_overrides["exploration_decay_freq"] = int(os.getenv("EXPLORATION_DECAY_FREQ", "10"))
+    reward_overrides["exploration_decay_floor"] = _env_float("EXPLORATION_DECAY_FLOOR", 0.15)
+
+    logger.info("v1.1 reward config (delta-based):")
+    for k, v in sorted(reward_overrides.items()):
+        logger.info("  %s = %s", k, v)
+
     env_var_pins: dict[str, float] = {}
-    for key in ("new_room", "grid_exploration", "exit_seeking",
-                "directional_bonus", "dialog_advance", "gate_slash",
-                "gate_proximity", "snow_region", "maku_loiter_penalty"):
-        if key in reward_overrides:
-            env_var_pins[key] = reward_overrides[key]
+    for key in reward_overrides:
+        env_var_pins[key] = reward_overrides[key]
 
-    if reward_overrides:
-        reward_config = reward_overrides
+    reward_config = reward_overrides
 
     rm_path = os.getenv("REWARD_MODEL_PATH", "")
 

@@ -1,6 +1,8 @@
-"""Reward shaping: coverage and potential-based RLAIF.
+"""Reward shaping: coverage with decay and potential-based RLAIF.
 
-Coverage reward: binary exploration bonus per unique tile and room.
+Coverage reward: exploration bonus per unique tile and room, with
+optional decay to incentivize continuous exploration (Pokemon Red style).
+
 RLAIF shaping: r' = r + gamma * phi(s') - phi(s) (potential-based).
 """
 
@@ -13,68 +15,90 @@ import numpy as np
 
 @dataclass
 class CoverageReward:
-    """Track coordinate coverage with binary exploration rewards.
+    """Track coordinate coverage with decaying exploration values.
 
-    Uses fine-grained (room_id, tile_x, tile_y) coordinate tracking.
-    Each 16×16-pixel tile position is a unique coordinate, giving ~80
-    coords per room (10 cols × 8 rows).
+    Each tile starts at ``exploration_inc`` when first visited. Over time,
+    tile values decay by ``decay_factor`` every ``decay_frequency`` steps,
+    with a floor of ``decay_floor``. This incentivizes the agent to keep
+    exploring rather than exhausting nearby tiles and stopping.
 
-    Binary exploration: first visit to a tile = bonus_per_tile,
-    all subsequent visits = 0.  This is the same approach used by
-    PokemonRedExperiments and LADXExperiments — simple, no decay,
-    no diminishing returns.
+    Room values work the same way — first visit = ``room_inc``, then decay.
 
-    New room discovery gives a one-time bonus_per_room.
+    The total exploration value is ``sum(tile_values) + sum(room_values)``.
+    In a delta-based reward system, the step reward from exploration is
+    the change in this total, which can be negative if decay outpaces
+    new discovery.
     """
 
-    bonus_per_tile: float = 0.1
-    bonus_per_room: float = 10.0
-    # coord → visited flag (set membership)
-    _visited_coords: set[tuple[int, int, int]] = field(default_factory=set)
-    _visited_rooms: set[int] = field(default_factory=set)
+    exploration_inc: float = 1.0      # Value assigned to newly visited tile
+    room_inc: float = 1.0             # Value assigned to newly visited room
+    decay_factor: float = 0.9995      # Multiply values by this each decay tick
+    decay_frequency: int = 10         # Decay every N steps
+    decay_floor: float = 0.15         # Minimum non-zero value (never fully forgotten)
 
-    def step(self, room_id: int, pixel_x: int, pixel_y: int) -> float:
-        """Return coverage reward for this step."""
-        reward = 0.0
+    # Internal state
+    _tile_values: dict[tuple[int, int, int], float] = field(default_factory=dict)
+    _room_values: dict[int, float] = field(default_factory=dict)
+    _step_count: int = 0
 
-        # New room bonus — flat per room, one-time only
-        if room_id not in self._visited_rooms:
-            self._visited_rooms.add(room_id)
-            reward += self.bonus_per_room
+    def step(self, room_id: int, pixel_x: int, pixel_y: int) -> None:
+        """Update coverage for this step (does NOT return reward directly).
+
+        In delta-based mode, the reward is computed externally from
+        the change in total_value().
+        """
+        self._step_count += 1
+
+        # New room
+        if room_id not in self._room_values:
+            self._room_values[room_id] = self.room_inc
 
         # Fine-grained coordinate: (room_id, tile_x, tile_y)
         tile_x = pixel_x // 16
         tile_y = pixel_y // 16
         coord = (room_id, tile_x, tile_y)
 
-        # Binary: first visit = bonus, revisit = 0
-        if coord not in self._visited_coords:
-            self._visited_coords.add(coord)
-            reward += self.bonus_per_tile
+        if coord not in self._tile_values:
+            self._tile_values[coord] = self.exploration_inc
 
-        return reward
+        # Periodic decay
+        if self._step_count % self.decay_frequency == 0:
+            self._decay()
+
+    def _decay(self) -> None:
+        """Apply decay to all tracked tile and room values."""
+        for coord in self._tile_values:
+            val = self._tile_values[coord] * self.decay_factor
+            self._tile_values[coord] = max(self.decay_floor, val)
+        for room_id in self._room_values:
+            val = self._room_values[room_id] * self.decay_factor
+            self._room_values[room_id] = max(self.decay_floor, val)
+
+    def total_tile_value(self) -> float:
+        """Sum of all tile exploration values (with decay applied)."""
+        return sum(self._tile_values.values())
+
+    def total_room_value(self) -> float:
+        """Sum of all room exploration values (with decay applied)."""
+        return sum(self._room_values.values())
 
     def reset(self) -> None:
-        self._visited_coords.clear()
-        self._visited_rooms.clear()
-
-    def reset_tiles(self) -> None:
-        """Reset tile coverage but keep room history.
-
-        This makes room bonuses one-shot within an epoch — once you visit
-        a room, you only get the bonus the first time.  Tile coverage
-        resets each episode so the agent still has per-step exploration
-        reward in known rooms.  Mirrors PokemonRed's persistent seen_coords.
-        """
-        self._visited_coords.clear()
+        self._tile_values.clear()
+        self._room_values.clear()
+        self._step_count = 0
 
     @property
     def unique_rooms(self) -> int:
-        return len(self._visited_rooms)
+        return len(self._room_values)
 
     @property
     def total_tiles(self) -> int:
-        return len(self._visited_coords)
+        return len(self._tile_values)
+
+    @property
+    def _visited_rooms(self) -> set[int]:
+        """Compatibility: set of visited room IDs."""
+        return set(self._room_values.keys())
 
 
 @dataclass
@@ -92,9 +116,9 @@ class PotentialShaping:
     """
 
     gamma: float = 0.99
-    lam: float = 0.05  # lambda weight for R_phi (conservative to avoid destabilization)
+    lam: float = 0.05
     epoch: int = 0
-    decay_rate: float = 0.95  # lam decays by 5% per epoch
+    decay_rate: float = 0.95
     _prev_potential: float = 0.0
 
     @property
@@ -103,15 +127,6 @@ class PotentialShaping:
         return self.lam * (self.decay_rate ** self.epoch)
 
     def shape(self, extrinsic: float, phi_s_prime: float) -> float:
-        """Apply potential-based shaping.
-
-        Args:
-            extrinsic: Raw extrinsic reward.
-            phi_s_prime: R_phi(s') from the reward model.
-
-        Returns:
-            Shaped reward.
-        """
         potential = self.effective_lam * phi_s_prime
         shaped = extrinsic + self.gamma * potential - self._prev_potential
         self._prev_potential = potential

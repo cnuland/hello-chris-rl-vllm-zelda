@@ -1,12 +1,15 @@
-"""Reward wrapper: integrates coverage, game events, and potential shaping.
+"""v1.1 Reward wrapper: delta-based rewards with exploration decay.
 
-Wraps ZeldaEnv to compute composite rewards from:
-  1. Game event rewards (health, keys, sword, death, milestones)
-  2. Coverage rewards (binary tile exploration, new rooms)
-  3. LLM advisor directives (seek_room, trigger_action, avoid_region)
-  4. Potential-based shaping from RLAIF reward model (when available)
+Inspired by pokemonred_puffer (drubinstein), this wrapper computes a total
+game state value each step and returns the DELTA as the step reward.
+This eliminates one-shot reward spikes and produces smooth gradients.
 
-Also handles episode export to MinIO for the judge/eval pipeline.
+Key design principles:
+  1. Delta-based: reward = new_total - old_total (no spikes, no UNACCOUNTED)
+  2. Exploration decay: tiles lose value over time, driving continuous movement
+  3. No penalties: purely additive rewards (no loiter, no death penalty)
+  4. No phases: single flat reward structure (game progression gates naturally)
+  5. Many small signals: events ~5-20, exploration ~0.02/tile, dialog ~0.5
 """
 
 from __future__ import annotations
@@ -42,17 +45,19 @@ from agent.env.ram_addresses import (
     SWORD_LEVEL,
 )
 
-# The Maku Tree gate is on the OVERWORLD (group 0) at room 0xD9 (row=13, col=9).
-# When slashed, bit 7 (0x80) is set at OVERWORLD_ROOM_FLAGS + 0xD9 = 0xC7D9.
-MAKU_GATE_ROOM = 0xD9
-from agent.env.phase_rewards import PhaseManager
 from agent.rl.rewards import CoverageReward, PotentialShaping
 
 logger = logging.getLogger(__name__)
 
+# The Maku Tree gate is on the OVERWORLD (group 0) at room 0xD9 (row=13, col=9).
+MAKU_GATE_ROOM = 0xD9
+
 
 class RewardWrapper(gym.Wrapper):
-    """Wraps ZeldaEnv with composite reward computation and episode export."""
+    """Delta-based reward wrapper with exploration decay.
+
+    Computes total game state value each step, returns the change as reward.
+    """
 
     def __init__(
         self,
@@ -67,109 +72,41 @@ class RewardWrapper(gym.Wrapper):
         super().__init__(env)
         cfg = reward_config or {}
 
-        # Game event reward scales
-        self._key_scale = cfg.get("key", 0.5)
-        self._death_penalty = cfg.get("death", -1.0)
-        self._health_loss_scale = cfg.get("health_loss", -0.005)
-        self._sword_bonus = cfg.get("sword", 15.0)
-        self._dungeon_bonus = cfg.get("dungeon", 100.0)
-        self._maku_tree_bonus = cfg.get("maku_tree", 100.0)
+        # --- Event flag weights (permanent, delta fires once) ---
+        self._w_gate_slash = float(cfg.get("gate_slash", 10.0))
+        self._w_maku_visit = float(cfg.get("maku_tree_visit", 5.0))
+        self._w_maku_dialog = float(cfg.get("maku_dialog", 8.0))
+        self._w_gnarled_key = float(cfg.get("gnarled_key", 15.0))
+        self._w_maku_seed = float(cfg.get("maku_seed", 25.0))
+        self._w_got_sword = float(cfg.get("sword", 5.0))
+        self._w_snow_region = float(cfg.get("snow_region", 10.0))
+        self._w_d1_entrance = float(cfg.get("d1_entrance_bonus", 12.0))
+        self._w_dungeon_entry = float(cfg.get("dungeon_entry", 20.0))
+        self._w_essence = float(cfg.get("essence", 30.0))
+        self._w_dungeon_key = float(cfg.get("dungeon_key_pickup", 5.0))
+        self._w_dungeon_floor = float(cfg.get("dungeon_floor", 5.0))
 
-        # Progression reward scales
-        self._dungeon_entry_bonus = cfg.get("dungeon_entry", 100.0)
-        self._maku_tree_visit_bonus = cfg.get("maku_tree_visit", 100.0)
-        self._rewarded_maku_visit = False  # One-time per episode
-        self._rewarded_dungeon_entry = False  # One-time per episode
-        self._indoor_entry_bonus = cfg.get("indoor_entry", 5.0)
-        self._dungeon_floor_bonus = cfg.get("dungeon_floor", 10.0)
+        # --- Exploration weights ---
+        self._w_exploration = float(cfg.get("grid_exploration", 0.02))
+        self._w_rooms = float(cfg.get("new_room", 0.5))
 
-        # Dialog interaction reward — teaches the agent that NPC dialog is
-        # valuable (required for quest progression: Maku Tree gives Gnarled Key)
-        self._dialog_bonus = cfg.get("dialog_bonus", 10.0)
-        self._dialog_rooms: set[int] = set()
-        self._prev_dialog_active = False
+        # --- Dialog weight ---
+        self._w_dialog = float(cfg.get("dialog_advance", 0.5))
+        self._dialog_cap = int(cfg.get("dialog_cap", 20))
 
-        # Dialog progression reward — pressing A while dialog is active
-        # advances text boxes.  This is critical for quest progression:
-        # the Maku Tree has a multi-box dialog that gives the Gnarled Key
-        # quest.  Without this, the agent starts dialog but never finishes.
-        self._dialog_advance_bonus = cfg.get("dialog_advance", 25.0)
-        self._dialog_advance_count = 0
-        self._dialog_advance_cap = 20  # max rewarded A-presses per episode
-        self._prev_dialog_value = 0    # raw DIALOG_STATE byte for tracking
-
-        # Maku Tree quest milestone rewards — MASSIVE one-time bonuses for
-        # critical quest progression. These must dominate room discovery (50/room)
-        # so the agent locks on once it finds the Maku Tree path.
-        self._maku_dialog_bonus = cfg.get("maku_dialog", 500.0)
-        self._gnarled_key_bonus = cfg.get("gnarled_key", 500.0)
-        self._maku_seed_bonus = cfg.get("maku_seed", 1000.0)
-        self._prev_maku_dialog = False
-        self._prev_gnarled_key = False
-        self._prev_maku_seed = False
-
-        # Maku Tree sub-event rewards — intermediate milestones that guide
-        # the agent through the required interaction sequence:
-        #   1. Slash the gate (room flag 0x80)  →  gate_slash_bonus
-        #   2. Reach new rooms in group 2       →  maku_room_bonus (per room)
-        #   3. Maku Tree stage changes (0xCC39) →  maku_stage_bonus
-        self._gate_slash_bonus = cfg.get("gate_slash", 250.0)
-        self._maku_room_bonus = cfg.get("maku_room", 100.0)
-        self._maku_stage_bonus = cfg.get("maku_stage", 300.0)
-        self._gate_slashed = False
-        self._baseline_gate_slashed = False
-        self._maku_rooms_visited: set[int] = set()
-        self._prev_maku_stage = 0
-
-        # Pixel position tracking — used to gate coverage reward behind
-        # actual movement (prevents standing-still farming)
-        self._prev_pixel_x = 0
-        self._prev_pixel_y = 0
-
-        # Milestone-triggered flag for this step
-        self._milestone_achieved_this_step = False
-
-        # Exit-seeking reward — per-step gradient toward room exits that
-        # lead to unvisited rooms.  Uses frontier_exit_dist() from ZeldaEnv
-        # which returns Manhattan distance to nearest walkable exit tile
-        # leading to an unvisited neighbor room.  Reward = scale * (prev - cur),
-        # positive when getting closer, negative when moving away.
-        self._exit_seeking_scale = cfg.get("exit_seeking", 0.0)
-        self._prev_frontier_dist = 0
-        self._prev_room_for_exit = -1
-
-        # Directional bonus — default OFF (0.0).  The LLM reward advisor
-        # can enable it by setting directional_bonus > 0 in the config
-        # along with a target room (row, col).  This is the key LLM-driven
-        # reward signal: the advisor analyzes agent behavior and decides
-        # where to direct exploration.
-        self._directional_bonus = cfg.get("directional_bonus", 0.0)
+        # --- Directional weight ---
+        self._w_directional = float(cfg.get("directional_bonus", 0.0))
         self._directional_target_row = int(cfg.get("directional_target_row",
-                                                    os.getenv("DIRECTIONAL_TARGET_ROW", "9")))
+                                                     os.getenv("DIRECTIONAL_TARGET_ROW", "9")))
         self._directional_target_col = int(cfg.get("directional_target_col",
-                                                    os.getenv("DIRECTIONAL_TARGET_COL", "6")))
-        self._directional_target_scale = float(cfg.get("directional_target_scale", "1.0"))
-        self._min_target_distance = 999
+                                                     os.getenv("DIRECTIONAL_TARGET_COL", "6")))
 
-        # Post-Gnarled-Key phase: once the agent has the key, suppress all
-        # Maku Tree farming rewards and activate directional guidance toward
-        # Dungeon 1 entrance at (row=9, col=6).
-        self._post_key_directional_activated = False
-        self._maku_loiter_penalty = cfg.get("maku_loiter_penalty", 1.0)
+        # --- Exploration decay parameters ---
+        decay_factor = float(cfg.get("exploration_decay", 0.9995))
+        decay_freq = int(cfg.get("exploration_decay_freq", 10))
+        decay_floor = float(cfg.get("exploration_decay_floor", 0.15))
 
-        # Phase-driven reward management — replaces scattered
-        # ``if has_gnarled_key_now:`` checks with declarative profiles.
-        self._phase_manager = PhaseManager()
-        phase_overrides = cfg.get("phase_overrides", {})
-        for phase_name, overrides in phase_overrides.items():
-            self._phase_manager.merge_advisor_overrides(phase_name, overrides)
-
-        # Snow region milestone — massive one-time bonus for reaching the
-        # D1 corridor (northbound route to Gnarled Root Dungeon).
-        # Tightened from the entire northwest quadrant to rows 9-11, cols 6-7
-        # to prevent rewarding westward movement toward Hero's Cave.
-        # Only fires after Gnarled Key is obtained.
-        self._snow_region_bonus = cfg.get("snow_region", 0.0)
+        # --- Snow region bounds ---
         self._snow_region_min_row = int(cfg.get("snow_region_min_row",
                                                  os.getenv("SNOW_REGION_MIN_ROW", "9")))
         self._snow_region_max_row = int(cfg.get("snow_region_max_row",
@@ -178,131 +115,89 @@ class RewardWrapper(gym.Wrapper):
                                                  os.getenv("SNOW_REGION_MIN_COL", "6")))
         self._snow_region_max_col = int(cfg.get("snow_region_max_col",
                                                  os.getenv("SNOW_REGION_MAX_COL", "7")))
-        self._entered_snow_region = False
 
-        # D1 entrance room bonus — one-time reward for reaching overworld
-        # room (9,6), the last overworld room before dungeon entry.  Bridges
-        # the reward gap between the snow region bonus (+2000) and the actual
-        # dungeon entry bonus (+3000).
-        self._d1_entrance_bonus = cfg.get("d1_entrance_bonus", 0.0)
+        # --- D1 entrance room ---
         self._d1_entrance_room = int(cfg.get("d1_entrance_room",
                                               os.getenv("D1_ENTRANCE_ROOM", "0x96")), 0)
-        self._reached_d1_entrance = False
 
-        # Structured directives from the LLM reward advisor — processed as
-        # one-time bonuses or per-step penalties based on area/action conditions.
-        self._directives = cfg.get("directives", [])
-        self._triggered_directives: set[str] = set()
-
-        # Gate proximity shaping — potential-based reward that guides the
-        # agent toward the Maku Tree gate tile in room 0xD9 (217).
-        # Reward = scale × (prev_dist - cur_dist), positive when approaching.
-        # This bridges the sparse reward gap: instead of needing to randomly
-        # discover gate slashing, the agent gets a continuous gradient signal.
-        self._gate_proximity_scale = cfg.get("gate_proximity", 0.0)
-        self._gate_tile_x = int(cfg.get("gate_tile_x", 5))
-        self._gate_tile_y = int(cfg.get("gate_tile_y", 1))
-        self._prev_gate_dist: float = 0.0
-
-        # Loiter grace period tracking — counts consecutive steps in each
-        # penalized area group.  The loiter penalty only applies after the
-        # profile's loiter_grace_steps threshold, teaching the agent
-        # "enter, interact, leave quickly" instead of "never enter."
-        self._loiter_steps_in_group: dict[int, int] = {}
-
-        # Sword interaction bonus — per-room reward for pressing A near
-        # obstacles or in key areas.  Default off (0.0).
-        self._sword_use_bonus = cfg.get("sword_use", 0.0)
-        self._a_press_rooms: set[tuple[int, int]] = set()
-        self._current_button = 0  # ButtonAction.A=0, ButtonAction.B=1
-
-        # Area-based exploration boost — multiplies coverage reward by
-        # active_group to guide exploration toward key progression areas.
-        self._area_boost = {
-            0: cfg.get("area_boost_overworld", 1.0),
-            1: cfg.get("area_boost_subrosia", 1.5),
-            2: cfg.get("area_boost_maku", 3.0),
-            3: cfg.get("area_boost_indoors", 1.5),
-            4: cfg.get("area_boost_dungeon", 2.0),
-            5: cfg.get("area_boost_dungeon", 2.0),
-        }
-
-        # Sub-reward modules
+        # Sub-modules
         self._coverage = CoverageReward(
-            bonus_per_tile=cfg.get("grid_exploration", 0.1),
-            bonus_per_room=cfg.get("new_room", 10.0),
+            exploration_inc=1.0,
+            room_inc=1.0,
+            decay_factor=decay_factor,
+            decay_frequency=decay_freq,
+            decay_floor=decay_floor,
         )
-        self._cumulative_coverage_reward = 0.0
 
-        # Global coverage cap — hard ceiling on per-episode exploration
-        # reward that applies REGARDLESS of phase.  Prevents the agent
-        # from exploiting uncapped phases (e.g., maku_interaction with 3×
-        # area boost) to farm exploration instead of completing milestones.
-        self._global_coverage_cap: float | None = cfg.get("global_coverage_cap", None)
-        if self._global_coverage_cap is not None:
-            self._global_coverage_cap = float(self._global_coverage_cap)
-
-        # Per-episode reward breakdown tracking (for debugging high rewards)
-        self._reward_breakdown: dict[str, float] = {}
-        self._episode_total_reward = 0.0
-        self._logged_breakdown = False
-
-        # Per-component reward accumulators for diagnostic breakdown.
-        # These track every reward source so REWARD BREAKDOWN can verify
-        # that total == sum(components), eliminating "mystery reward" gaps.
-        self._acc_exit_seeking = 0.0
-        self._acc_directional = 0.0
-        self._acc_indoor_entry = 0.0
-        self._acc_dialog = 0.0  # dialog_bonus + dialog_advance + dialog_state
-        self._acc_milestones = 0.0  # gate, key, maku, sword, dungeon, snow
-        self._acc_health = 0.0
-        self._acc_loiter = 0.0
-        self._acc_proximity = 0.0
-
-        # Potential-based shaping from RLAIF reward model (lambda decays with epoch)
+        # Potential-based shaping (optional)
         self._shaping = PotentialShaping(lam=0.01, epoch=epoch) if enable_shaping else None
         self._reward_model = None
         if enable_shaping and reward_model_path:
             self._load_reward_model(reward_model_path)
 
-        # Tracking
-        self._prev_health = 0
-        self._prev_keys = 0
-        self._prev_sword = 0
-        self._prev_essences = 0
-        self._prev_group = 0
-        self._prev_dungeon_index = 0xFF
-        self._prev_dungeon_floor = 0
-        self._epoch = epoch
-        self._episode_id = ""
+        # Delta tracking
+        self._total_value = 0.0
+        self._episode_total_reward = 0.0
 
-        # Progression milestones — track what the agent achieves each episode
+        # --- Event flags (set once per episode, contribute to state value) ---
+        self._gate_slashed = False
+        self._visited_maku = False
+        self._maku_dialog_given = False
+        self._has_gnarled_key = False
+        self._has_maku_seed = False
+        self._got_sword = False
+        self._entered_snow_region = False
+        self._reached_d1_entrance = False
+        self._entered_dungeon = False
+
+        # Baselines (from save state — don't award events already achieved)
+        self._baseline_gate_slashed = False
+        self._baseline_gnarled_key = False
+        self._baseline_maku_seed = False
+        self._baseline_sword = 0
+        self._baseline_group = 0
+        self._baseline_maku_stage = 0
+
+        # Cumulative counters
+        self._dialog_advance_count = 0
+        self._essences_collected = 0
+        self._dungeon_keys = 0
+        self._max_dungeon_floor = 0
+        self._maku_stage = 0
+
+        # Directional tracking
+        self._min_target_distance = 999
+        self._last_overworld_room = None
+
+        # Previous frame state
+        self._prev_pixel_x = 0
+        self._prev_pixel_y = 0
+        self._prev_group = 0
+        self._prev_dialog_active = False
+        self._prev_dialog_value = 0
+        self._current_button = 0
+
+        # Milestone tracking (for info dict compatibility)
         self._milestone_got_sword = False
         self._milestone_entered_dungeon = False
         self._milestone_visited_maku_tree = False
-        self._rewarded_maku_visit = False
-        self._rewarded_dungeon_entry = False
-        self._rewarded_indoor_entry = False
         self._milestone_entered_snow_region = False
         self._milestone_reached_d1_entrance = False
         self._milestone_essences = 0
         self._milestone_dungeon_keys = 0
         self._milestone_max_rooms = 0
 
-        # Advancing checkpoint: capture PyBoy save states at milestone moments.
-        self._milestone_state_dir = os.getenv("MILESTONE_STATE_DIR", "")
-        self._captured_milestones: set[str] = set()
+        # Epoch tracking
+        self._epoch = epoch
 
         # Episode export
         self._exporter = None
         self._enable_export = enable_export
-        # MILESTONE_EXPORT: all envs export, but only upload episodes that
-        # achieve significant milestones (dungeon entry, snow region, etc.)
         self._milestone_export = os.getenv("MILESTONE_EXPORT", "").lower() in ("1", "true")
-        self._episode_worthy = False  # set True when a milestone fires
+        self._episode_worthy = False
+        self._episode_id = ""
         if enable_export:
             if self._milestone_export:
-                # All envs participate in deferred mode
                 self._init_exporter(s3_config, deferred=True)
             else:
                 import random
@@ -314,74 +209,480 @@ class RewardWrapper(gym.Wrapper):
                 if random.random() < export_prob:
                     self._init_exporter(s3_config)
 
-    def _load_reward_model(self, path: str) -> None:
-        try:
-            import tempfile
+        # Milestone state capture
+        self._milestone_state_dir = os.getenv("MILESTONE_STATE_DIR", "")
+        self._captured_milestones: set[str] = set()
 
-            from agent.evaluator.reward_model import RewardModel
+        # Breakdown logging
+        self._logged_breakdown = False
+        self._prev_state_dict: dict[str, float] = {}
 
-            local_path = path
-            if not os.path.exists(local_path):
-                try:
-                    from agent.utils.s3 import S3Client
-                    from agent.utils.config import S3Config
+    # ------------------------------------------------------------------
+    # Game state value computation (the heart of delta-based rewards)
+    # ------------------------------------------------------------------
 
-                    s3 = S3Client(S3Config())
-                    rm_data = s3.download_bytes("zelda-models", path)
-                    os.makedirs("/tmp/reward_model", exist_ok=True)
-                    safe_name = path.replace("/", "_")
-                    local_path = f"/tmp/reward_model/{safe_name}"
-                    if not os.path.exists(local_path):
-                        tmp_fd, tmp_path = tempfile.mkstemp(
-                            dir="/tmp/reward_model", suffix=".pt"
-                        )
-                        try:
-                            os.write(tmp_fd, rm_data)
-                            os.close(tmp_fd)
-                            os.rename(tmp_path, local_path)
-                        except Exception:
-                            os.close(tmp_fd)
-                            if os.path.exists(tmp_path):
-                                os.unlink(tmp_path)
-                            raise
-                    logger.info("Downloaded reward model from s3 (%d bytes)", len(rm_data))
-                except Exception as s3_err:
-                    logger.warning("Could not download reward model from s3: %s", s3_err)
-                    self._reward_model = None
-                    return
+    def get_game_state_value(self, info: dict) -> dict[str, float]:
+        """Compute total game state value as a dict of named components.
 
-            self._reward_model = RewardModel()
-            self._reward_model.load(local_path)
-            logger.info("Loaded reward model from %s", local_path)
-        except Exception as e:
-            logger.warning("Could not load reward model: %s", e)
-            self._reward_model = None
+        The step reward is sum(new_values) - sum(old_values).
+        Event flags contribute permanently once set.
+        Exploration values decay over time.
+        """
+        active_group = info.get("active_group", 0)
 
-    def _init_exporter(
-        self, s3_config: dict[str, str] | None, deferred: bool = False,
-    ) -> None:
-        try:
-            from agent.evaluator.exporter import EpisodeExporter
-            from agent.utils.s3 import S3Client
-            from agent.utils.config import S3Config
+        # Directional progress toward target (overworld only)
+        directional_val = 0.0
+        if self._w_directional > 0 and self._last_overworld_room is not None:
+            room = self._last_overworld_room
+            row, col = room // 16, room % 16
+            # Value = how close we are (inverse distance), scaled
+            dist = abs(row - self._directional_target_row) + abs(col - self._directional_target_col)
+            max_dist = 20  # max meaningful distance on 16x16 grid
+            directional_val = self._w_directional * max(0, max_dist - dist)
 
-            if s3_config:
-                cfg = S3Config(**s3_config)
-            else:
-                cfg = S3Config()
-            s3 = S3Client(cfg)
-            s3.ensure_bucket(cfg.episodes_bucket)
-            self._exporter = EpisodeExporter(
-                s3_client=s3,
-                bucket=cfg.episodes_bucket,
-                frames_per_segment=300,
-                png_interval=int(os.getenv("PNG_INTERVAL", "60")),
-                epoch=self._epoch,
-                deferred=deferred,
+        return {
+            # Permanent event flags
+            "gate_slashed": self._w_gate_slash * float(self._gate_slashed and not self._baseline_gate_slashed),
+            "maku_visited": self._w_maku_visit * float(self._visited_maku),
+            "maku_dialog": self._w_maku_dialog * float(self._maku_dialog_given),
+            "gnarled_key": self._w_gnarled_key * float(self._has_gnarled_key and not self._baseline_gnarled_key),
+            "maku_seed": self._w_maku_seed * float(self._has_maku_seed and not self._baseline_maku_seed),
+            "got_sword": self._w_got_sword * float(self._got_sword),
+            "snow_region": self._w_snow_region * float(self._entered_snow_region),
+            "d1_entrance": self._w_d1_entrance * float(self._reached_d1_entrance),
+            "dungeon_entry": self._w_dungeon_entry * float(self._entered_dungeon),
+            "essences": self._w_essence * self._essences_collected,
+            "dungeon_keys": self._w_dungeon_key * self._dungeon_keys,
+            "dungeon_floors": self._w_dungeon_floor * self._max_dungeon_floor,
+
+            # Decaying exploration
+            "exploration": self._w_exploration * self._coverage.total_tile_value(),
+            "rooms": self._w_rooms * self._coverage.total_room_value(),
+
+            # Cumulative counters
+            "dialog": self._w_dialog * min(self._dialog_advance_count, self._dialog_cap),
+
+            # Spatial progress
+            "direction": directional_val,
+        }
+
+    # ------------------------------------------------------------------
+    # Reset
+    # ------------------------------------------------------------------
+
+    def reset(self, **kwargs) -> tuple[np.ndarray, dict[str, Any]]:
+        obs, info = self.env.reset(**kwargs)
+
+        # Snapshot baseline from save state RAM
+        self._prev_group = info.get("active_group", 0)
+        self._baseline_group = self._prev_group
+        self._prev_pixel_x = info.get("pixel_x", 0)
+        self._prev_pixel_y = info.get("pixel_y", 0)
+        self._prev_dialog_active = False
+        self._prev_dialog_value = 0
+
+        if hasattr(self.env, "_read"):
+            self._baseline_sword = self.env._read(SWORD_LEVEL)
+            self._baseline_gnarled_key = bool(
+                self.env._read(GNARLED_KEY_OBTAINED) & GNARLED_KEY_OBTAINED_MASK
             )
-        except Exception as e:
-            logger.warning("Episode export disabled: %s", e)
-            self._exporter = None
+            self._baseline_maku_seed = bool(
+                self.env._read(MAKU_SEED_FLAG) & MAKU_SEED_MASK
+            )
+            gate_flags = self.env._read(OVERWORLD_ROOM_FLAGS + MAKU_GATE_ROOM)
+            self._baseline_gate_slashed = bool(gate_flags & ROOMFLAG_GATE_HIT)
+            self._baseline_maku_stage = self.env._read(MAKU_TREE_STAGE)
+        else:
+            self._baseline_sword = 0
+            self._baseline_gnarled_key = False
+            self._baseline_maku_seed = False
+            self._baseline_gate_slashed = False
+            self._baseline_maku_stage = 0
+
+        # Reset event flags
+        self._gate_slashed = self._baseline_gate_slashed
+        self._visited_maku = False
+        self._maku_dialog_given = False
+        self._has_gnarled_key = self._baseline_gnarled_key
+        self._has_maku_seed = self._baseline_maku_seed
+        self._got_sword = False
+        self._entered_snow_region = False
+        self._reached_d1_entrance = False
+        self._entered_dungeon = False
+        self._dialog_advance_count = 0
+        self._essences_collected = 0
+        self._dungeon_keys = 0
+        self._max_dungeon_floor = 0
+        self._maku_stage = self._baseline_maku_stage
+
+        # Directional tracking
+        start_room = info.get("room_id", 0)
+        self._last_overworld_room = None
+        if self._prev_group == 0:
+            self._last_overworld_room = start_room
+            row, col = start_room // 16, start_room % 16
+            self._min_target_distance = (
+                abs(row - self._directional_target_row) +
+                abs(col - self._directional_target_col)
+            )
+        else:
+            self._min_target_distance = -1
+
+        # Reset exploration
+        self._coverage.reset()
+
+        # Compute initial state value
+        self._total_value = sum(self.get_game_state_value(info).values())
+        self._episode_total_reward = 0.0
+        self._logged_breakdown = False
+        self._prev_state_dict = {}
+
+        # Reset milestones
+        self._milestone_got_sword = False
+        self._milestone_entered_dungeon = False
+        self._milestone_visited_maku_tree = False
+        self._milestone_entered_snow_region = False
+        self._milestone_reached_d1_entrance = False
+        self._milestone_essences = 0
+        self._milestone_dungeon_keys = 0
+        self._milestone_max_rooms = 0
+        self._captured_milestones.clear()
+
+        # Potential shaping
+        if self._shaping:
+            self._shaping.reset()
+
+        # Expose visited rooms to base env
+        self.env._visited_rooms_set = self._coverage._visited_rooms
+
+        # Episode export
+        self._episode_worthy = False
+        if self._exporter:
+            self._episode_id = self._exporter.begin_episode()
+            info["episode_id"] = self._episode_id
+
+        # Log start once per epoch
+        if not hasattr(self, "_logged_start"):
+            logger.info(
+                "Episode start: room_id=%d (row=%d, col=%d), group=%d, sword=%d",
+                start_room, start_room // 16, start_room % 16,
+                self._prev_group, self._baseline_sword,
+            )
+            self._logged_start = True
+
+        info["epoch"] = self._epoch
+        return obs, info
+
+    # ------------------------------------------------------------------
+    # Step
+    # ------------------------------------------------------------------
+
+    def step(self, action) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+        action_arr = np.asarray(action).flatten()
+        self._current_button = int(action_arr[1]) if len(action_arr) > 1 else 0
+
+        obs, _, terminated, truncated, info = self.env.step(action)
+
+        active_group = info.get("active_group", 0)
+        room_id = info.get("room_id", 0)
+
+        # --- Update game event flags ---
+        self._update_flags(info)
+
+        # --- Update exploration (only when moved) ---
+        is_transitioning = info.get("transitioning", False)
+        if not is_transitioning:
+            cur_px = info.get("pixel_x", 0)
+            cur_py = info.get("pixel_y", 0)
+            if cur_px != self._prev_pixel_x or cur_py != self._prev_pixel_y:
+                # Qualify room for multi-group tracking
+                if active_group == 0:
+                    qualified_room = room_id
+                else:
+                    qualified_room = active_group * 256 + room_id
+                self._coverage.step(qualified_room, cur_px, cur_py)
+
+                # Track overworld room for directional
+                if active_group == 0:
+                    self._last_overworld_room = room_id
+
+            self._prev_pixel_x = cur_px
+            self._prev_pixel_y = cur_py
+
+        self._prev_group = active_group
+
+        # --- Compute delta reward ---
+        new_state = self.get_game_state_value(info)
+        new_total = sum(new_state.values())
+        reward = new_total - self._total_value
+        self._total_value = new_total
+        self._prev_state_dict = new_state
+
+        # Potential-based shaping (optional)
+        if self._shaping is not None and self._reward_model is not None:
+            phi = self._reward_model.predict(obs)
+            reward = self._shaping.shape(reward, phi)
+
+        self._episode_total_reward += reward
+
+        # --- Log room discoveries ---
+        new_rooms = self._coverage.unique_rooms
+        if new_rooms > getattr(self, "_prev_logged_rooms", 0):
+            logger.info(
+                "NEW ROOM: group=%d room=%d (row=%d, col=%d) | total=%d",
+                active_group, room_id, room_id // 16, room_id % 16, new_rooms,
+            )
+        self._prev_logged_rooms = new_rooms
+
+        # --- Record frame for export ---
+        if self._exporter:
+            screen = self.env.render() if hasattr(self.env, "render") else None
+            self._exporter.record_frame(
+                step=info.get("step", 0),
+                state=info,
+                action=action,
+                reward=reward,
+                screen_array=screen,
+            )
+
+        # --- Episode end ---
+        if (terminated or truncated) and self._exporter:
+            self._exporter.end_episode()
+            if self._milestone_export:
+                if self._episode_worthy:
+                    self._exporter.commit_episode()
+                else:
+                    self._exporter.discard_episode()
+
+        if (terminated or truncated) and not self._logged_breakdown:
+            self._logged_breakdown = True
+            self._log_breakdown(info)
+
+        # --- Update milestone tracking for info dict ---
+        self._milestone_max_rooms = max(self._milestone_max_rooms, new_rooms)
+        if hasattr(self.env, "_read"):
+            keys = self.env._read(DUNGEON_KEYS)
+            self._milestone_dungeon_keys = max(self._milestone_dungeon_keys, keys)
+            essences = bin(self.env._read(ESSENCES_COLLECTED)).count("1")
+            self._milestone_essences = max(self._milestone_essences, essences)
+        dungeon_idx = info.get("dungeon_index", 0xFF)
+        if (active_group in (4, 5) and self._baseline_group not in (4, 5)
+                and 1 <= dungeon_idx < 0xFF):
+            self._milestone_entered_dungeon = True
+        if active_group == 2 and self._baseline_group != 2:
+            self._milestone_visited_maku_tree = True
+
+        # --- Populate info dict ---
+        info["epoch"] = self._epoch
+        info["unique_rooms"] = new_rooms
+        info["unique_tiles"] = self._coverage.total_tiles
+        info["seen_coords"] = self._coverage.total_tiles
+        info["episode_reward"] = self._episode_total_reward
+
+        # Milestone flags
+        info["milestone_got_sword"] = float(self._milestone_got_sword)
+        info["milestone_entered_dungeon"] = float(self._milestone_entered_dungeon)
+        info["milestone_visited_maku_tree"] = float(self._milestone_visited_maku_tree)
+        info["milestone_essences"] = float(self._milestone_essences)
+        info["milestone_dungeon_keys"] = float(self._milestone_dungeon_keys)
+        info["milestone_max_rooms"] = float(self._milestone_max_rooms)
+        info["milestone_gnarled_key"] = float(
+            self._has_gnarled_key and not self._baseline_gnarled_key
+        )
+        info["milestone_gate_slashed"] = float(
+            self._gate_slashed and not self._baseline_gate_slashed
+        )
+        info["milestone_entered_snow_region"] = float(self._milestone_entered_snow_region)
+        info["milestone_reached_d1_entrance"] = float(self._milestone_reached_d1_entrance)
+        info["milestone_maku_dialog"] = float(self._maku_dialog_given)
+        info["milestone_maku_seed"] = float(
+            self._has_maku_seed and not self._baseline_maku_seed
+        )
+        info["milestone_maku_rooms"] = float(self._coverage.unique_rooms)
+        info["milestone_maku_stage"] = float(self._maku_stage > self._baseline_maku_stage)
+
+        # Baselines
+        info["baseline_has_sword"] = float(self._baseline_sword > 0)
+        info["baseline_has_gnarled_key"] = float(self._baseline_gnarled_key)
+        info["baseline_has_maku_seed"] = float(self._baseline_maku_seed)
+        info["baseline_has_maku_dialog"] = float(False)
+        info["baseline_in_maku"] = float(self._baseline_group == 2)
+        info["baseline_gate_slashed"] = float(self._baseline_gate_slashed)
+        info["baseline_maku_stage"] = float(self._baseline_maku_stage)
+        start_room = getattr(self, "_start_room_id", info.get("room_id", 0))
+        start_row = start_room // 16
+        start_col = start_room % 16
+        info["baseline_in_snow_region"] = float(
+            self._baseline_group == 0
+            and self._snow_region_min_row <= start_row <= self._snow_region_max_row
+            and self._snow_region_min_col <= start_col <= self._snow_region_max_col
+        )
+        info["baseline_in_dungeon"] = float(self._baseline_group in (4, 5))
+
+        # Phase compatibility (flat — always report current progression)
+        info["current_phase"] = self._detect_phase()
+
+        return obs, reward, terminated, truncated, info
+
+    # ------------------------------------------------------------------
+    # Flag updates (detect game events from RAM)
+    # ------------------------------------------------------------------
+
+    def _update_flags(self, info: dict) -> None:
+        """Read RAM and update event flags."""
+        active_group = info.get("active_group", 0)
+        room_id = info.get("room_id", 0)
+        dungeon_idx = info.get("dungeon_index", 0xFF)
+
+        if not hasattr(self.env, "_read"):
+            return
+
+        read = self.env._read
+
+        # Sword upgrade
+        sword = read(SWORD_LEVEL)
+        if sword > self._baseline_sword and not self._got_sword:
+            self._got_sword = True
+            self._milestone_got_sword = True
+            self._capture_milestone_state("got_sword", self._episode_total_reward)
+            logger.info("MILESTONE: Got sword (level %d)", sword)
+
+        # Gate slash
+        if not self._gate_slashed:
+            gate_flags = read(OVERWORLD_ROOM_FLAGS + MAKU_GATE_ROOM)
+            if gate_flags & ROOMFLAG_GATE_HIT:
+                self._gate_slashed = True
+                if not self._baseline_gate_slashed:
+                    self._capture_milestone_state("gate_slashed", self._episode_total_reward)
+                    logger.info("MILESTONE: Gate slashed!")
+
+        # Maku Tree visit
+        if active_group == 2 and self._prev_group != 2 and not self._visited_maku:
+            self._visited_maku = True
+            logger.info("MILESTONE: Visited Maku Tree")
+
+        # Maku dialog (Gnarled Key quest given)
+        maku_dialog = bool(read(GNARLED_KEY_GIVEN_FLAG) & GNARLED_KEY_GIVEN_MASK)
+        if maku_dialog and not self._maku_dialog_given:
+            self._maku_dialog_given = True
+            self._capture_milestone_state("maku_dialog", self._episode_total_reward)
+            logger.info("MILESTONE: Maku Tree gave Gnarled Key quest!")
+
+        # Gnarled Key obtained
+        gnarled_key = bool(read(GNARLED_KEY_OBTAINED) & GNARLED_KEY_OBTAINED_MASK)
+        if gnarled_key and not self._has_gnarled_key:
+            self._has_gnarled_key = True
+            if not self._baseline_gnarled_key:
+                self._capture_milestone_state("gnarled_key", self._episode_total_reward)
+                logger.info("MILESTONE: Gnarled Key obtained!")
+
+        # Maku Seed
+        maku_seed = bool(read(MAKU_SEED_FLAG) & MAKU_SEED_MASK)
+        if maku_seed and not self._has_maku_seed:
+            self._has_maku_seed = True
+            if not self._baseline_maku_seed:
+                self._capture_milestone_state("maku_seed", self._episode_total_reward)
+                logger.info("MILESTONE: Maku Seed obtained!")
+
+        # Maku stage
+        self._maku_stage = read(MAKU_TREE_STAGE)
+
+        # Essences
+        essences = bin(read(ESSENCES_COLLECTED)).count("1")
+        if essences > self._essences_collected:
+            self._essences_collected = essences
+            logger.info("MILESTONE: Essence collected (total: %d)", essences)
+
+        # Dungeon keys
+        keys = read(DUNGEON_KEYS)
+        if keys > self._dungeon_keys:
+            self._dungeon_keys = keys
+
+        # Dungeon floor
+        dungeon_floor = info.get("dungeon_floor", 0)
+        if active_group in (4, 5) and dungeon_floor > self._max_dungeon_floor:
+            self._max_dungeon_floor = dungeon_floor
+
+        # Dungeon entry
+        if (active_group in (4, 5) and self._baseline_group not in (4, 5)
+                and 1 <= dungeon_idx < 0xFF and not self._entered_dungeon):
+            self._entered_dungeon = True
+            self._episode_worthy = True
+            self._capture_milestone_state("entered_dungeon", self._episode_total_reward)
+            logger.info(
+                "MILESTONE: Dungeon entry! index=%d group=%d room=%d",
+                dungeon_idx, active_group, room_id,
+            )
+
+        # Snow region
+        if (self._has_gnarled_key and not self._entered_snow_region
+                and active_group == 0):
+            cur_row = room_id // 16
+            cur_col = room_id % 16
+            if (self._snow_region_min_row <= cur_row <= self._snow_region_max_row
+                    and self._snow_region_min_col <= cur_col <= self._snow_region_max_col):
+                self._entered_snow_region = True
+                self._milestone_entered_snow_region = True
+                self._episode_worthy = True
+                self._capture_milestone_state("entered_snow_region", self._episode_total_reward)
+                logger.info("MILESTONE: Entered snow region at (%d,%d)", cur_row, cur_col)
+
+        # D1 entrance room
+        if (not self._reached_d1_entrance and active_group == 0
+                and room_id == self._d1_entrance_room):
+            self._reached_d1_entrance = True
+            self._milestone_reached_d1_entrance = True
+            self._episode_worthy = True
+            self._capture_milestone_state("reached_d1_entrance", self._episode_total_reward)
+            logger.info("MILESTONE: Reached D1 entrance room 0x%02X", room_id)
+
+        # Dialog advance — reward A-presses during active dialog
+        dialog_active = info.get("dialog_active", False)
+        if dialog_active and self._dialog_advance_count < self._dialog_cap:
+            if self._current_button == ButtonAction.A:
+                self._dialog_advance_count += 1
+        self._prev_dialog_active = dialog_active
+
+    # ------------------------------------------------------------------
+    # Phase detection (for info dict compatibility, NOT reward gating)
+    # ------------------------------------------------------------------
+
+    def _detect_phase(self) -> str:
+        """Simple phase string for logging/monitoring only."""
+        if self._entered_dungeon:
+            return "dungeon"
+        if self._entered_snow_region:
+            return "snow_region"
+        if self._has_gnarled_key:
+            return "post_key"
+        if self._gate_slashed:
+            return "post_gate"
+        if self._got_sword or self._baseline_sword > 0:
+            return "pre_maku"
+        return "pre_sword"
+
+    # ------------------------------------------------------------------
+    # Logging
+    # ------------------------------------------------------------------
+
+    def _log_breakdown(self, info: dict) -> None:
+        """Log reward breakdown at episode end."""
+        state = self._prev_state_dict or self.get_game_state_value(info)
+        components = " | ".join(f"{k}={v:.1f}" for k, v in state.items() if v != 0)
+        logger.info(
+            "REWARD BREAKDOWN: total=%.1f, state_value=%.1f, tiles=%d, rooms=%d, "
+            "phase=%s | %s",
+            self._episode_total_reward,
+            self._total_value,
+            self._coverage.total_tiles,
+            self._coverage.unique_rooms,
+            self._detect_phase(),
+            components,
+        )
+
+    # ------------------------------------------------------------------
+    # Milestone state capture
+    # ------------------------------------------------------------------
 
     def _capture_milestone_state(self, milestone_name: str, reward_so_far: float) -> None:
         """Capture PyBoy emulator state when a milestone fires."""
@@ -423,831 +724,74 @@ class RewardWrapper(gym.Wrapper):
             milestone_name, room_id, reward_so_far, meta["unique_tiles"],
         )
 
-    def reset(self, **kwargs) -> tuple[np.ndarray, dict[str, Any]]:
-        obs, info = self.env.reset(**kwargs)
+    # ------------------------------------------------------------------
+    # Episode export
+    # ------------------------------------------------------------------
 
-        # Snapshot baseline state from actual RAM
-        self._prev_health = info.get("health", 0)
-        self._prev_group = info.get("active_group", 0)
-        self._prev_dungeon_index = info.get("dungeon_index", 0xFF)
-        self._prev_dungeon_floor = info.get("dungeon_floor", 0)
-        if hasattr(self.env, "_read"):
-            self._prev_keys = self.env._read(DUNGEON_KEYS)
-            self._prev_sword = self.env._read(SWORD_LEVEL)
-            self._prev_essences = bin(self.env._read(ESSENCES_COLLECTED)).count("1")
-            self._prev_maku_dialog = bool(
-                self.env._read(GNARLED_KEY_GIVEN_FLAG) & GNARLED_KEY_GIVEN_MASK
-            )
-            self._prev_gnarled_key = bool(
-                self.env._read(GNARLED_KEY_OBTAINED) & GNARLED_KEY_OBTAINED_MASK
-            )
-            self._prev_maku_seed = bool(
-                self.env._read(MAKU_SEED_FLAG) & MAKU_SEED_MASK
-            )
-            self._prev_maku_stage = self.env._read(MAKU_TREE_STAGE)
-        else:
-            self._prev_keys = 0
-            self._prev_sword = 0
-            self._prev_essences = 0
-            self._prev_maku_dialog = False
-            self._prev_gnarled_key = False
-            self._prev_maku_seed = False
+    def _init_exporter(
+        self, s3_config: dict[str, str] | None, deferred: bool = False,
+    ) -> None:
+        try:
+            from agent.evaluator.exporter import EpisodeExporter
+            from agent.utils.s3 import S3Client
+            from agent.utils.config import S3Config
 
-        # Reset sub-modules (per-episode)
-        self._coverage.reset()
-        self._cumulative_coverage_reward = 0.0
-        self._dialog_rooms.clear()
-        self._prev_dialog_active = False
-        self._dialog_advance_count = 0
-        self._prev_dialog_value = 0
-        self._prev_pixel_x = info.get("pixel_x", 0)
-        self._prev_pixel_y = info.get("pixel_y", 0)
-
-        # Exit-seeking tracking — reset on episode start
-        self._prev_frontier_dist = 0
-        self._prev_room_for_exit = -1
-
-        # Directional bonus tracking — initialize from starting position.
-        # Only meaningful on the overworld (group 0) where room IDs encode
-        # a 16×16 grid.  Indoor/dungeon room IDs use a different coordinate
-        # space, so we defer min_distance calculation to the first overworld step.
-        self._start_room_id = info.get("room_id", 0)
-        self._start_group = info.get("active_group", 0)
-        self._last_overworld_room = None
-        if self._start_group == 0:
-            start_row = self._start_room_id // 16
-            start_col = self._start_room_id % 16
-            self._min_target_distance = (abs(start_row - self._directional_target_row) +
-                                         abs(start_col - self._directional_target_col))
-            self._last_overworld_room = self._start_room_id
-        else:
-            # Starting inside building/dungeon — defer to first overworld step
-            self._min_target_distance = -1
-
-        # Reset triggered directives for new episode
-        self._triggered_directives.clear()
-
-        # Log starting position once per epoch for debugging
-        if not hasattr(self, "_logged_start"):
-            logger.info(
-                "Episode start: room_id=%d (row=%d, col=%d), group=%d, "
-                "pixel=(%d,%d), sword=%d",
-                self._start_room_id,
-                self._start_room_id // 16, self._start_room_id % 16,
-                info.get("active_group", -1),
-                info.get("pixel_x", 0), info.get("pixel_y", 0),
-                self._prev_sword,
-            )
-            self._logged_start = True
-
-        # Reset milestones for new episode
-        self._milestone_got_sword = False
-        self._milestone_entered_dungeon = False
-        self._milestone_visited_maku_tree = False
-        self._rewarded_maku_visit = False
-        self._rewarded_dungeon_entry = False
-        self._rewarded_indoor_entry = False
-        self._milestone_entered_snow_region = False
-        self._milestone_reached_d1_entrance = False
-        self._milestone_essences = 0
-        self._milestone_dungeon_keys = 0
-        self._milestone_max_rooms = 0
-        self._baseline_sword = self._prev_sword
-        self._baseline_essences = self._prev_essences
-        self._baseline_maku_dialog = self._prev_maku_dialog
-        self._baseline_gnarled_key = self._prev_gnarled_key
-        self._baseline_maku_seed = self._prev_maku_seed
-        self._baseline_maku_stage = self._prev_maku_stage
-        self._baseline_group = self._prev_group
-        # Detect gate-slash baseline from save state RAM — mirrors
-        # baseline_gnarled_key pattern.  If the save state already has the
-        # gate slashed, we start in post_gate phase without awarding bonus.
-        if hasattr(self.env, "_read"):
-            gate_flags = self.env._read(OVERWORLD_ROOM_FLAGS + MAKU_GATE_ROOM)
-            self._baseline_gate_slashed = bool(gate_flags & ROOMFLAG_GATE_HIT)
-        else:
-            self._baseline_gate_slashed = False
-        self._gate_slashed = self._baseline_gate_slashed
-        self._prev_gate_dist = 0.0
-        self._entered_snow_region = False
-        self._reached_d1_entrance = False
-        self._loiter_steps_in_group.clear()
-        self._episode_total_reward = 0.0
-        self._logged_breakdown = False
-        self._acc_exit_seeking = 0.0
-        self._acc_directional = 0.0
-        self._acc_indoor_entry = 0.0
-        self._acc_dialog = 0.0
-        self._acc_milestones = 0.0
-        self._acc_health = 0.0
-        self._acc_loiter = 0.0
-        self._acc_proximity = 0.0
-        self._maku_rooms_visited.clear()
-        self._captured_milestones.clear()
-        self._a_press_rooms.clear()
-        self._current_button = 0
-        self._post_key_directional_activated = False
-
-        # Detect initial phase from save state baseline and apply
-        # the profile's directional target if applicable.
-        initial_phase = self._phase_manager.reset(
-            sword_level=self._prev_sword,
-            has_gnarled_key=self._prev_gnarled_key,
-            active_group=self._prev_group,
-            baseline_sword=self._baseline_sword,
-            baseline_gnarled_key=self._baseline_gnarled_key,
-            gate_slashed=self._gate_slashed,
-            dungeon_index=self._prev_dungeon_index,
-        )
-        profile = self._phase_manager.active_profile
-        if profile.directional_target is not None:
-            self._directional_target_row = profile.directional_target[0]
-            self._directional_target_col = profile.directional_target[1]
-            if profile.directional_bonus > 0 and self._directional_bonus == 0.0:
-                self._directional_bonus = profile.directional_bonus
-
-        if self._shaping:
-            self._shaping.reset()
-
-        # Expose visited rooms set to base env for state_encoder access.
-        self.env._visited_rooms_set = self._coverage._visited_rooms
-
-        # Start episode recording
-        self._episode_worthy = False
-        if self._exporter:
-            self._episode_id = self._exporter.begin_episode()
-            info["episode_id"] = self._episode_id
-
-        info["epoch"] = self._epoch
-        return obs, info
-
-    def step(self, action) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
-        # Extract button action for sword interaction bonus
-        action_arr = np.asarray(action).flatten()
-        self._current_button = int(action_arr[1]) if len(action_arr) > 1 else 0
-
-        obs, _, terminated, truncated, info = self.env.step(action)
-
-        self._milestone_achieved_this_step = False
-        reward = self._compute_reward(obs, info, terminated)
-
-        # Log new room discoveries
-        new_rooms = self._coverage.unique_rooms
-        room_id = info.get("room_id", 0)
-        active_group = info.get("active_group", 0)
-        if new_rooms > getattr(self, "_prev_logged_rooms", 0):
-            logger.info(
-                "NEW ROOM: group=%d room=%d (row=%d, col=%d) | total=%d | bonus=%.1f",
-                active_group, room_id, room_id // 16, room_id % 16,
-                new_rooms, self._coverage.bonus_per_room,
-            )
-        self._prev_logged_rooms = new_rooms
-
-        # Record frame for export
-        if self._exporter:
-            screen = self.env.render() if hasattr(self.env, "render") else None
-            self._exporter.record_frame(
-                step=info.get("step", 0),
-                state=info,
-                action=action,
-                reward=reward,
-                screen_array=screen,
-            )
-
-        # Track cumulative reward for breakdown logging
-        self._episode_total_reward += reward
-
-        # Flush on episode end
-        if (terminated or truncated) and self._exporter:
-            self._exporter.end_episode()
-            # In milestone-export mode, only upload episodes that hit milestones
-            if self._milestone_export:
-                if self._episode_worthy:
-                    self._exporter.commit_episode()
-                else:
-                    self._exporter.discard_episode()
-
-        # Log reward breakdown for every episode (reset flag in reset())
-        if (terminated or truncated) and not self._logged_breakdown:
-            self._logged_breakdown = True
-            n_transitions = len(self._phase_manager.phase_history) - 1
-            # Compute unaccounted reward (should be ~0 if all sources tracked)
-            tracked_sum = (
-                self._cumulative_coverage_reward
-                + self._acc_exit_seeking
-                + self._acc_directional
-                + self._acc_indoor_entry
-                + self._acc_dialog
-                + self._acc_health
-                + self._acc_loiter
-                + self._acc_proximity
-            )
-            unaccounted = self._episode_total_reward - tracked_sum
-            logger.info(
-                "REWARD BREAKDOWN: total=%.1f, coverage=%.1f (cap=%s, global_cap=%s), "
-                "tiles=%d, rooms=%d, phase=%s, transitions=%d, "
-                "gate=%d, key=%d, dialog=%d | "
-                "exit_seek=%.1f, directional=%.1f, indoor=%.1f, "
-                "dlg=%.1f, health=%.1f, loiter=%.1f, prox=%.1f, "
-                "UNACCOUNTED=%.1f",
-                self._episode_total_reward,
-                self._cumulative_coverage_reward,
-                self._phase_manager.active_profile.coverage_reward_cap,
-                self._global_coverage_cap,
-                self._coverage.total_tiles,
-                self._coverage.unique_rooms,
-                self._phase_manager.current_phase,
-                n_transitions,
-                int(self._gate_slashed),
-                int(self._prev_gnarled_key),
-                self._dialog_advance_count,
-                self._acc_exit_seeking,
-                self._acc_directional,
-                self._acc_indoor_entry,
-                self._acc_dialog,
-                self._acc_health,
-                self._acc_loiter,
-                self._acc_proximity,
-                unaccounted,
-            )
-
-        # Update milestones
-        self._milestone_max_rooms = max(self._milestone_max_rooms, new_rooms)
-        if hasattr(self.env, "_read"):
-            sword = self.env._read(SWORD_LEVEL)
-            if sword > self._baseline_sword:
-                self._milestone_got_sword = True
-            keys = self.env._read(DUNGEON_KEYS)
-            self._milestone_dungeon_keys = max(self._milestone_dungeon_keys, keys)
-            essences = bin(self.env._read(ESSENCES_COLLECTED)).count("1")
-            self._milestone_essences = max(self._milestone_essences, essences)
-        dungeon_index = info.get("dungeon_index", 0xFF)
-        # Only count REAL dungeon entries (1 <= index < 0xFF).
-        # Hero's Cave stays at dungeon_index=0xFF (never 0 as docs suggest).
-        # 0xFF also appears on the first few frames of ANY dungeon transition
-        # before the RAM settles, so excluding 0xFF prevents false positives.
-        if (active_group in (4, 5) and self._baseline_group not in (4, 5)
-                and 1 <= dungeon_index < 0xFF):
-            self._milestone_entered_dungeon = True
-        if active_group == 2 and self._baseline_group != 2:
-            self._milestone_visited_maku_tree = True
-
-        info["epoch"] = self._epoch
-        info["unique_rooms"] = new_rooms
-        info["unique_tiles"] = self._coverage.total_tiles
-        info["seen_coords"] = self._coverage.total_tiles
-        info["current_phase"] = self._phase_manager.current_phase
-
-        # Progression milestones
-        info["milestone_got_sword"] = float(self._milestone_got_sword)
-        info["milestone_entered_dungeon"] = float(self._milestone_entered_dungeon)
-        info["milestone_visited_maku_tree"] = float(self._milestone_visited_maku_tree)
-        info["milestone_essences"] = float(self._milestone_essences)
-        info["milestone_dungeon_keys"] = float(self._milestone_dungeon_keys)
-        info["milestone_max_rooms"] = float(self._milestone_max_rooms)
-        info["milestone_maku_dialog"] = float(
-            self._prev_maku_dialog and not self._baseline_maku_dialog
-        )
-        info["milestone_gnarled_key"] = float(
-            self._prev_gnarled_key and not self._baseline_gnarled_key
-        )
-        info["milestone_maku_seed"] = float(
-            self._prev_maku_seed and not self._baseline_maku_seed
-        )
-        info["milestone_gate_slashed"] = float(
-            self._gate_slashed and not self._baseline_gate_slashed
-        )
-        info["milestone_entered_snow_region"] = float(self._milestone_entered_snow_region)
-        info["milestone_reached_d1_entrance"] = float(self._milestone_reached_d1_entrance)
-        info["milestone_maku_rooms"] = float(len(self._maku_rooms_visited))
-        info["milestone_maku_stage"] = float(
-            self._prev_maku_stage > self._baseline_maku_stage
-        )
-
-        # Save-state baseline inventory
-        info["baseline_has_sword"] = float(self._baseline_sword > 0)
-        info["baseline_has_maku_dialog"] = float(self._baseline_maku_dialog)
-        info["baseline_has_gnarled_key"] = float(self._baseline_gnarled_key)
-        info["baseline_has_maku_seed"] = float(self._baseline_maku_seed)
-        info["baseline_maku_stage"] = float(self._baseline_maku_stage)
-        info["baseline_in_maku"] = float(self._baseline_group == 2)
-        start_row = self._start_room_id // 16
-        start_col = self._start_room_id % 16
-        info["baseline_in_snow_region"] = float(
-            self._baseline_group == 0
-            and self._snow_region_min_row <= start_row <= self._snow_region_max_row
-            and self._snow_region_min_col <= start_col <= self._snow_region_max_col
-        )
-        info["baseline_in_dungeon"] = float(self._baseline_group in (4, 5))
-        info["baseline_gate_slashed"] = float(self._baseline_gate_slashed)
-
-        return obs, reward, terminated, truncated, info
-
-    def _compute_reward(
-        self, obs: np.ndarray, info: dict[str, Any], terminated: bool
-    ) -> float:
-        reward = 0.0
-
-        # --- Game event rewards ---
-        health = info.get("health", 0)
-        health_delta = health - self._prev_health
-        if health_delta < 0:
-            h_rew = health_delta * abs(self._health_loss_scale)
-            reward += h_rew
-            self._acc_health += h_rew
-        self._prev_health = health
-
-        # Death
-        if terminated:
-            reward += self._death_penalty
-
-        # Keys
-        if hasattr(self.env, "_read"):
-            keys = self.env._read(DUNGEON_KEYS)
-            if keys > self._prev_keys:
-                reward += (keys - self._prev_keys) * self._key_scale
-            self._prev_keys = keys
-
-            # Sword upgrade
-            sword = self.env._read(SWORD_LEVEL)
-            if sword > self._prev_sword:
-                reward += self._sword_bonus
-                self._milestone_achieved_this_step = True
-                self._capture_milestone_state("got_sword", reward)
-            self._prev_sword = sword
-
-            # Essences
-            essences = bin(self.env._read(ESSENCES_COLLECTED)).count("1")
-            if essences > self._prev_essences:
-                reward += self._dungeon_bonus
-                self._milestone_achieved_this_step = True
-            self._prev_essences = essences
-
-        # --- Progression rewards ---
-        active_group = info.get("active_group", 0)
-        dungeon_floor = info.get("dungeon_floor", 0)
-        room_id = info.get("room_id", 0)
-        group_changed = active_group != self._prev_group
-
-        # Post-Gnarled-Key reward gating: once the agent has the key,
-        # suppress ALL Maku Tree farming rewards so the agent pivots
-        # toward Dungeon 1 instead of looping between gate and tree.
-        has_gnarled_key_now = False
-        if hasattr(self.env, "_read"):
-            has_gnarled_key_now = bool(
-                self.env._read(GNARLED_KEY_OBTAINED) & GNARLED_KEY_OBTAINED_MASK
-            )
-
-        # Dungeon entry bonus — ONE-TIME per episode, real dungeons only.
-        # dungeon_index: 0xFF=not in dungeon / Hero's Cave, 1=Gnarled Root
-        # (D1), 2=Snake's Remains (D2), ...
-        # We require 1 <= index < 0xFF to exclude both Hero's Cave (stays at
-        # 0xFF) and the transient 0xFF frames when entering a real dungeon.
-        # Uses _baseline_group (not _prev_group) because dungeon_index RAM
-        # update lags active_group by a few frames — on the exact transition
-        # frame, dungeon_index is still 0xFF.  Checking baseline + one-time
-        # flag ensures we catch it once dungeon_index settles to 1..7.
-        dungeon_idx = info.get("dungeon_index", 0xFF)
-        if (active_group in (4, 5) and self._baseline_group not in (4, 5)
-                and 1 <= dungeon_idx < 0xFF
-                and not self._rewarded_dungeon_entry):
-            self._rewarded_dungeon_entry = True
-            reward += self._dungeon_entry_bonus
-            self._milestone_achieved_this_step = True
-            self._episode_worthy = True  # Mark for deferred export
-            self._capture_milestone_state("entered_dungeon", reward)
-            logger.info(
-                "DUNGEON ENTRY: dungeon_index=%d, group=%d, room=%d",
-                dungeon_idx, active_group, room_id,
-            )
-
-        # Maku Tree visit bonus — ONE-TIME per episode, suppressed in post-key phases.
-        # Previously fired on every group transition into group 2, allowing
-        # farming by oscillating between overworld (0) and Maku Tree (2).
-        if (active_group == 2 and self._prev_group != 2
-                and not self._rewarded_maku_visit
-                and not self._phase_manager.is_reward_suppressed("maku_tree_visit")):
-            self._rewarded_maku_visit = True
-            reward += self._maku_tree_visit_bonus
-            self._milestone_achieved_this_step = True
-            self._capture_milestone_state("visited_maku_tree", reward)
-
-        # Indoor area bonus — once per episode to prevent boundary farming.
-        # v18 showed the agent oscillating at doorways 314 times/ep for 1,570
-        # reward, drowning out gate slash (2,000) through reliability.
-        if (active_group == 3
-                and self._prev_group != 3
-                and not self._rewarded_indoor_entry):
-            self._rewarded_indoor_entry = True
-            reward += self._indoor_entry_bonus
-            self._acc_indoor_entry += self._indoor_entry_bonus
-
-        # Dungeon floor change bonus (real dungeons only, exclude Hero's Cave)
-        if (dungeon_floor != self._prev_dungeon_floor
-                and active_group in (4, 5) and 1 <= dungeon_idx < 0xFF):
-            reward += self._dungeon_floor_bonus
-
-        self._prev_group = active_group
-        self._prev_dungeon_floor = dungeon_floor
-
-        # Dialog interaction bonus — first dialog trigger per room
-        dialog_active = info.get("dialog_active", False)
-        room_id = info.get("room_id", 0)
-        if dialog_active and not self._prev_dialog_active:
-            if room_id not in self._dialog_rooms:
-                reward += self._dialog_bonus
-                self._acc_dialog += self._dialog_bonus
-                self._dialog_rooms.add(room_id)
-        self._prev_dialog_active = dialog_active
-
-        # Dialog progression reward — reward A-presses during active dialog,
-        # but ONLY in quest-relevant areas (Maku Tree group 2, indoors group 3).
-        # This prevents farming random overworld NPCs while teaching the agent
-        # to press A to advance through the Maku Tree's multi-box dialog
-        # (required to get the Gnarled Key quest).
-        if hasattr(self.env, "_read"):
-            dialog_value = self.env._read(DIALOG_STATE)
-            # Phase-driven dialog area restriction — each phase defines which
-            # area groups qualify for dialog advance rewards.
-            in_quest_area = active_group in self._phase_manager.get_dialog_advance_groups()
-            if (dialog_active and in_quest_area
-                    and self._dialog_advance_count < self._dialog_advance_cap):
-                # Reward A-presses during dialog — directly teaches "press A to advance text"
-                if self._current_button == ButtonAction.A:
-                    reward += self._dialog_advance_bonus
-                    self._acc_dialog += self._dialog_advance_bonus
-                    self._dialog_advance_count += 1
-                    logger.info(
-                        "DIALOG ADVANCE: A-press in group=%d room=%d count=%d/%d (+%.0f)",
-                        active_group, room_id, self._dialog_advance_count,
-                        self._dialog_advance_cap, self._dialog_advance_bonus,
-                    )
-                # Also reward dialog value changes (text state transitions)
-                elif (dialog_value != self._prev_dialog_value
-                      and self._prev_dialog_value != 0
-                      and dialog_value != 0):
-                    ds_rew = self._dialog_advance_bonus * 0.5
-                    reward += ds_rew
-                    self._acc_dialog += ds_rew
-                    self._dialog_advance_count += 1
-                    logger.info(
-                        "DIALOG STATE CHANGE: group=%d 0x%02X → 0x%02X room=%d (+%.0f)",
-                        active_group, self._prev_dialog_value, dialog_value,
-                        room_id, self._dialog_advance_bonus * 0.5,
-                    )
-            self._prev_dialog_value = dialog_value
-        else:
-            self._prev_dialog_value = 0
-
-        # Maku Tree quest milestones — massive one-time bonuses
-        if hasattr(self.env, "_read"):
-            maku_dialog = bool(self.env._read(GNARLED_KEY_GIVEN_FLAG) & GNARLED_KEY_GIVEN_MASK)
-            if maku_dialog and not self._prev_maku_dialog:
-                reward += self._maku_dialog_bonus
-                self._milestone_achieved_this_step = True
-                logger.info("MILESTONE: Maku Tree gave Gnarled Key quest! (+%.0f)", self._maku_dialog_bonus)
-                self._capture_milestone_state("maku_dialog", reward)
-            self._prev_maku_dialog = maku_dialog
-
-            gnarled_key = bool(self.env._read(GNARLED_KEY_OBTAINED) & GNARLED_KEY_OBTAINED_MASK)
-            if gnarled_key and not self._prev_gnarled_key:
-                reward += self._gnarled_key_bonus
-                self._milestone_achieved_this_step = True
-                logger.info("MILESTONE: Gnarled Key obtained! (+%.0f)", self._gnarled_key_bonus)
-                self._capture_milestone_state("gnarled_key", reward)
-            self._prev_gnarled_key = gnarled_key
-
-            maku_seed = bool(self.env._read(MAKU_SEED_FLAG) & MAKU_SEED_MASK)
-            if maku_seed and not self._prev_maku_seed:
-                reward += self._maku_seed_bonus
-                self._milestone_achieved_this_step = True
-                logger.info("MILESTONE: Maku Seed obtained! (+%.0f)", self._maku_seed_bonus)
-            self._prev_maku_seed = maku_seed
-
-        # --- Gate slash detection (overworld group 0, room 0xD9) ---
-        # The Maku Tree gate is on the OVERWORLD — check the overworld room
-        # flags at a fixed address, not the Maku/Subrosia group flags.
-        if hasattr(self.env, "_read") and not self._gate_slashed:
-            gate_flags = self.env._read(OVERWORLD_ROOM_FLAGS + MAKU_GATE_ROOM)
-            if gate_flags & ROOMFLAG_GATE_HIT:
-                self._gate_slashed = True
-                self._milestone_achieved_this_step = True
-                if not self._baseline_gate_slashed:
-                    # Within-episode gate slash — award bonus
-                    reward += self._gate_slash_bonus
-                    logger.info(
-                        "MILESTONE: Maku Tree gate slashed! "
-                        "addr=0x%04X flags=0x%02X (+%.0f)",
-                        OVERWORLD_ROOM_FLAGS + MAKU_GATE_ROOM,
-                        gate_flags, self._gate_slash_bonus,
-                    )
-                    self._capture_milestone_state("gate_slashed", reward)
-
-        # --- Gate proximity shaping (overworld only) ---
-        # Potential-based reward: positive when approaching the gate tile,
-        # negative when moving away.  Uses cross-room Manhattan distance
-        # so the signal extends beyond room 217 to neighboring rooms.
-        if (self._gate_proximity_scale > 0
-                and not self._gate_slashed
-                and active_group == 0):
-            cur_row = room_id // 16
-            cur_col = room_id % 16
-            gate_row = MAKU_GATE_ROOM // 16  # 13
-            gate_col = MAKU_GATE_ROOM % 16   # 9
-
-            # Cross-room distance: room grid distance × 10 tiles + in-room offset
-            room_dist_tiles = (abs(cur_row - gate_row) + abs(cur_col - gate_col)) * 10
-            if room_id == MAKU_GATE_ROOM:
-                # Same room: use actual tile distance to gate
-                cur_tile_x = info.get("pixel_x", 0) // 16
-                cur_tile_y = info.get("pixel_y", 0) // 16
-                gate_dist = abs(cur_tile_x - self._gate_tile_x) + abs(cur_tile_y - self._gate_tile_y)
+            if s3_config:
+                cfg = S3Config(**s3_config)
             else:
-                # Different room: use room-level distance (coarse)
-                gate_dist = float(room_dist_tiles)
-
-            if self._prev_gate_dist > 0:
-                delta = self._prev_gate_dist - gate_dist
-                prox_rew = self._gate_proximity_scale * delta
-                reward += prox_rew
-                self._acc_proximity += prox_rew
-            self._prev_gate_dist = gate_dist
-
-        # --- Maku Tree sub-event rewards (group 2 interior) ---
-        # Phase-driven suppression replaces hardcoded has_gnarled_key_now check.
-        if active_group == 2 and hasattr(self.env, "_read"):
-            room_id = info.get("room_id", 0)
-
-            # New rooms within group 2 — suppressed in post-key phases
-            if (room_id not in self._maku_rooms_visited
-                    and not self._phase_manager.is_reward_suppressed("maku_room")):
-                self._maku_rooms_visited.add(room_id)
-                reward += self._maku_room_bonus
-                self._milestone_achieved_this_step = True
-                logger.info(
-                    "MILESTONE: New Maku Tree room %d (total: %d) (+%.0f)",
-                    room_id, len(self._maku_rooms_visited), self._maku_room_bonus,
-                )
-
-            # Maku Tree stage change — suppressed in post-key phases
-            maku_stage = self.env._read(MAKU_TREE_STAGE)
-            if (maku_stage != self._prev_maku_stage
-                    and maku_stage > self._baseline_maku_stage
-                    and not self._phase_manager.is_reward_suppressed("maku_stage")):
-                reward += self._maku_stage_bonus
-                self._milestone_achieved_this_step = True
-                logger.info(
-                    "MILESTONE: Maku Tree stage %d → %d (+%.0f)",
-                    self._prev_maku_stage, maku_stage, self._maku_stage_bonus,
-                )
-            self._prev_maku_stage = maku_stage
-
-        # --- Phase-driven loiter penalty with grace period ---
-        # Replaces hardcoded ``if has_gnarled_key_now and active_group == 2``
-        # with profile-based penalty lookup.  Grace period allows the agent
-        # to enter, interact, and leave before penalty kicks in.
-        phase_loiter = self._phase_manager.get_loiter_penalty(active_group)
-        if phase_loiter > 0:
-            # Track consecutive steps in this penalized group
-            steps = self._loiter_steps_in_group.get(active_group, 0) + 1
-            self._loiter_steps_in_group[active_group] = steps
-            grace = self._phase_manager.active_profile.loiter_grace_steps
-            if steps > grace:
-                reward -= phase_loiter
-                self._acc_loiter -= phase_loiter
-        else:
-            # Reset counter when leaving penalized group
-            if active_group in self._loiter_steps_in_group:
-                del self._loiter_steps_in_group[active_group]
-            # Legacy fallback when loiter_penalties not set in profile
-            if has_gnarled_key_now and active_group == 2 and self._maku_loiter_penalty > 0:
-                reward -= self._maku_loiter_penalty
-                self._acc_loiter -= self._maku_loiter_penalty
-
-        # --- Snow region milestone (post-Gnarled-Key) ---
-        # One-time bonus for reaching the D1 corridor (rows 9-11, cols 6-7).
-        # Tightened from entire northwest quadrant to prevent rewarding
-        # westward movement toward Hero's Cave.
-        if (has_gnarled_key_now
-                and self._snow_region_bonus > 0
-                and not self._entered_snow_region
-                and active_group == 0):
-            room_id = info.get("room_id", 0)
-            cur_row = room_id // 16
-            cur_col = room_id % 16
-            if (self._snow_region_min_row <= cur_row <= self._snow_region_max_row
-                    and self._snow_region_min_col <= cur_col <= self._snow_region_max_col):
-                self._entered_snow_region = True
-                self._milestone_entered_snow_region = True
-                self._milestone_achieved_this_step = True
-                self._episode_worthy = True
-                reward += self._snow_region_bonus
-                logger.info(
-                    "MILESTONE: Entered snow region at room (%d,%d)! (+%.0f)",
-                    cur_row, cur_col, self._snow_region_bonus,
-                )
-                self._capture_milestone_state("entered_snow_region", reward)
-
-        # --- D1 entrance room bonus (overworld only) ---
-        # One-time bonus for reaching the specific overworld room that
-        # contains the D1 dungeon entrance.  Bridges the reward gap between
-        # the snow region bonus and the actual dungeon entry transition.
-        if (self._d1_entrance_bonus > 0
-                and not self._reached_d1_entrance
-                and active_group == 0):
-            room_id = info.get("room_id", 0)
-            if room_id == self._d1_entrance_room:
-                self._reached_d1_entrance = True
-                self._milestone_reached_d1_entrance = True
-                self._milestone_achieved_this_step = True
-                self._episode_worthy = True
-                reward += self._d1_entrance_bonus
-                logger.info(
-                    "MILESTONE: Reached D1 entrance room 0x%02X! (+%.0f)",
-                    room_id, self._d1_entrance_bonus,
-                )
-                self._capture_milestone_state("reached_d1_entrance", reward)
-
-        # --- Phase re-detection on milestone events OR group transitions ---
-        # Re-detect when any milestone fires OR when the area group changes.
-        # Group transitions must trigger re-detection independently because
-        # suppressed milestones (e.g., maku_tree_visit in post_key) won't
-        # set _milestone_achieved_this_step, leaving the phase stuck.
-        if self._milestone_achieved_this_step or group_changed:
-            phase_changed = self._phase_manager.update_phase(
-                sword_level=self._prev_sword,
-                has_gnarled_key=has_gnarled_key_now,
-                active_group=active_group,
-                entered_snow_region=self._entered_snow_region,
-                baseline_sword=self._baseline_sword,
-                baseline_gnarled_key=self._baseline_gnarled_key,
-                step=info.get("step", 0),
-                gate_slashed=self._gate_slashed,
-                dungeon_index=info.get("dungeon_index", 0xFF),
+                cfg = S3Config()
+            s3 = S3Client(cfg)
+            s3.ensure_bucket(cfg.episodes_bucket)
+            self._exporter = EpisodeExporter(
+                s3_client=s3,
+                bucket=cfg.episodes_bucket,
+                frames_per_segment=300,
+                png_interval=int(os.getenv("PNG_INTERVAL", "60")),
+                epoch=self._epoch,
+                deferred=deferred,
             )
-            if phase_changed:
-                profile = self._phase_manager.active_profile
-                if profile.directional_target is not None:
-                    new_row, new_col = profile.directional_target
-                    target_changed = (
-                        new_row != self._directional_target_row
-                        or new_col != self._directional_target_col
-                    )
-                    self._directional_target_row = new_row
-                    self._directional_target_col = new_col
-                    if profile.directional_bonus > 0 and self._directional_bonus == 0.0:
-                        self._directional_bonus = profile.directional_bonus
-                    # Only reset min distance when the TARGET actually changes
-                    # (e.g., maku_interaction→post_key switches from gate to D1).
-                    # Don't reset on same-target phase oscillations (pre_maku ↔
-                    # maku_interaction both target 13,9) — that allows farming
-                    # directional reward by crossing group boundaries repeatedly.
-                    if target_changed:
-                        if active_group == 0:
-                            # On overworld: use actual position
-                            ref_room = info.get("room_id", 0)
-                            self._min_target_distance = (
-                                abs(ref_room // 16 - new_row)
-                                + abs(ref_room % 16 - new_col)
-                            )
-                        elif self._last_overworld_room is not None:
-                            # Inside building: use last overworld position
-                            ref_room = self._last_overworld_room
-                            self._min_target_distance = (
-                                abs(ref_room // 16 - new_row)
-                                + abs(ref_room % 16 - new_col)
-                            )
-                        else:
-                            # Never been on overworld — defer to first step
-                            self._min_target_distance = -1
+        except Exception as e:
+            logger.warning("Episode export disabled: %s", e)
+            self._exporter = None
 
-        # --- Sword interaction bonus ---
-        if self._sword_use_bonus > 0 and self._current_button == ButtonAction.A:
-            room_key = (active_group, room_id)
-            if room_key not in self._a_press_rooms:
-                self._a_press_rooms.add(room_key)
-                bonus = self._sword_use_bonus
-                if active_group == 2:
-                    bonus *= 3.0
-                elif hasattr(self.env, "_read"):
-                    pushing = self.env._read(LINK_PUSHING_DIRECTION)
-                    if pushing != 0xFF and not info.get("transitioning", False):
-                        bonus *= 2.0
-                reward += bonus
+    def _load_reward_model(self, path: str) -> None:
+        try:
+            import tempfile
+            from agent.evaluator.reward_model import RewardModel
 
-        # --- LLM Advisor Directives ---
-        for directive in self._directives:
-            dtype = directive.get("type")
-            if dtype == "seek_room":
-                tgt_group = directive.get("target_group")
-                bonus = directive.get("bonus", 0)
-                key = f"seek_{tgt_group}"
-                if (tgt_group is not None and active_group == tgt_group
-                        and key not in self._triggered_directives):
-                    reward += bonus
-                    self._triggered_directives.add(key)
-                    logger.info("DIRECTIVE: seek_room group=%d triggered (+%.1f)", tgt_group, bonus)
-            elif dtype == "trigger_action":
-                condition = directive.get("condition", "")
-                bonus = directive.get("bonus", 0)
-                if condition == "dialog_in_group_2" and dialog_active and active_group == 2:
-                    if "dialog_g2" not in self._triggered_directives:
-                        reward += bonus
-                        self._triggered_directives.add("dialog_g2")
-                        logger.info("DIRECTIVE: dialog_in_group_2 triggered (+%.1f)", bonus)
-            elif dtype == "avoid_region":
-                tgt_group = directive.get("target_group")
-                if tgt_group is not None and active_group == tgt_group:
-                    reward += directive.get("bonus", 0)
+            local_path = path
+            if not os.path.exists(local_path):
+                try:
+                    from agent.utils.s3 import S3Client
+                    from agent.utils.config import S3Config
 
-        # --- Exploration rewards (only when NOT transitioning) ---
-        is_transitioning = info.get("transitioning", False)
-        if not is_transitioning:
-            # Coverage reward with area-based boost — only when moved
-            cur_pixel_x = info.get("pixel_x", 0)
-            cur_pixel_y = info.get("pixel_y", 0)
-            actually_moved = (cur_pixel_x != self._prev_pixel_x or
-                              cur_pixel_y != self._prev_pixel_y)
-            if actually_moved:
-                raw_room = info.get("room_id", 0)
-                if active_group == 0:
-                    qualified_room = raw_room
-                else:
-                    qualified_room = active_group * 256 + raw_room
-                coverage = self._coverage.step(
-                    qualified_room,
-                    cur_pixel_x,
-                    cur_pixel_y,
-                )
-                area_mult = self._area_boost.get(active_group, 1.0)
-                coverage_reward = coverage * area_mult
+                    s3 = S3Client(S3Config())
+                    rm_data = s3.download_bytes("zelda-models", path)
+                    os.makedirs("/tmp/reward_model", exist_ok=True)
+                    safe_name = path.replace("/", "_")
+                    local_path = f"/tmp/reward_model/{safe_name}"
+                    if not os.path.exists(local_path):
+                        tmp_fd, tmp_path = tempfile.mkstemp(
+                            dir="/tmp/reward_model", suffix=".pt"
+                        )
+                        try:
+                            os.write(tmp_fd, rm_data)
+                            os.close(tmp_fd)
+                            os.rename(tmp_path, local_path)
+                        except Exception:
+                            os.close(tmp_fd)
+                            if os.path.exists(tmp_path):
+                                os.unlink(tmp_path)
+                            raise
+                    logger.info("Downloaded reward model from s3 (%d bytes)", len(rm_data))
+                except Exception as s3_err:
+                    logger.warning("Could not download reward model from s3: %s", s3_err)
+                    self._reward_model = None
+                    return
 
-                # Coverage cap — prevents exploration reward from drowning
-                # out milestone rewards.  Uses the MORE restrictive of:
-                # (a) phase-specific cap (if set), (b) global cap (if set).
-                phase_cap = self._phase_manager.active_profile.coverage_reward_cap
-                effective_cap = None
-                if phase_cap is not None and self._global_coverage_cap is not None:
-                    effective_cap = min(phase_cap, self._global_coverage_cap)
-                elif phase_cap is not None:
-                    effective_cap = phase_cap
-                elif self._global_coverage_cap is not None:
-                    effective_cap = self._global_coverage_cap
-                if effective_cap is not None:
-                    remaining = max(0.0, effective_cap - self._cumulative_coverage_reward)
-                    coverage_reward = min(coverage_reward, remaining)
-                self._cumulative_coverage_reward += coverage_reward
-
-                reward += coverage_reward
-            # --- Exit-seeking reward (guides agent toward frontier exits) ---
-            # Provides a per-step gradient toward room exits that lead to
-            # unvisited rooms.  Only fires when the agent actually moves and
-            # stays in the same room (room transitions reset the baseline).
-            if self._exit_seeking_scale > 0 and actually_moved:
-                cur_frontier_dist = self.env.frontier_exit_dist(
-                    self._coverage._visited_rooms
-                )
-                cur_room = info.get("room_id", 0)
-                if (self._prev_room_for_exit == cur_room
-                        and self._prev_frontier_dist > 0):
-                    dist_delta = self._prev_frontier_dist - cur_frontier_dist
-                    es_rew = dist_delta * self._exit_seeking_scale
-                    reward += es_rew
-                    self._acc_exit_seeking += es_rew
-                self._prev_frontier_dist = cur_frontier_dist
-                self._prev_room_for_exit = cur_room
-
-            self._prev_pixel_x = cur_pixel_x
-            self._prev_pixel_y = cur_pixel_y
-
-        # --- Directional bonus (overworld only) ---
-        # Only fires on group 0 where room IDs encode a 16×16 overworld grid.
-        # Indoor/dungeon rooms have different coordinate spaces that would
-        # produce nonsensical distances.  This also prevents the "Maku Tree
-        # exit bonus" where exiting from interior room (0,11) to overworld
-        # (13,9) would earn 7 rooms of "free" directional reward.
-        if (not is_transitioning
-                and self._directional_bonus > 0
-                and active_group == 0):
-            room_id = info.get("room_id", 0)
-            self._last_overworld_room = room_id
-            cur_row = room_id // 16
-            cur_col = room_id % 16
-            target_dist = (abs(cur_row - self._directional_target_row) +
-                          abs(cur_col - self._directional_target_col))
-            if self._min_target_distance < 0:
-                # Deferred init: first overworld step after starting indoors
-                self._min_target_distance = target_dist
-            elif target_dist < self._min_target_distance:
-                delta = self._min_target_distance - target_dist
-                dir_rew = delta * self._directional_bonus * self._directional_target_scale
-                reward += dir_rew
-                self._acc_directional += dir_rew
-                self._min_target_distance = target_dist
-
-        # --- Potential-based shaping ---
-        if self._shaping is not None and self._reward_model is not None:
-            phi = self._reward_model.predict(obs)
-            reward = self._shaping.shape(reward, phi)
-
-        return reward
+            self._reward_model = RewardModel()
+            self._reward_model.load(local_path)
+            logger.info("Loaded reward model from %s", local_path)
+        except Exception as e:
+            logger.warning("Could not load reward model: %s", e)
+            self._reward_model = None
