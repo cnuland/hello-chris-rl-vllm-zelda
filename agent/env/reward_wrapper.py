@@ -106,6 +106,11 @@ class RewardWrapper(gym.Wrapper):
 
         # --- Idle penalty weight ---
         self._w_idle = float(cfg.get("idle_penalty", 0.002))
+        # Rooms where idle penalty is exempt (milestone interaction locations)
+        self._idle_exempt_rooms: set[int] = {
+            0xD9,  # Maku Gate (217) — gate slashing
+            0x96,  # D1 entrance (150) — dungeon entry
+        }
 
         # --- Exploration decay parameters ---
         decay_factor = float(cfg.get("exploration_decay", 0.9995))
@@ -410,6 +415,10 @@ class RewardWrapper(gym.Wrapper):
 
         # --- Update exploration (only when moved) ---
         is_transitioning = info.get("transitioning", False)
+        dialog_active = info.get("dialog_active", False)
+        menu_active = info.get("menu_active", False)
+        busy = is_transitioning or dialog_active or menu_active
+
         if not is_transitioning:
             cur_px = info.get("pixel_x", 0)
             cur_py = info.get("pixel_y", 0)
@@ -430,6 +439,11 @@ class RewardWrapper(gym.Wrapper):
 
                 # Reset idle counter on movement
                 self._consecutive_idle_steps = 0
+            elif busy or active_group != 0 or room_id in self._idle_exempt_rooms:
+                # Don't penalize idle during dialog, menus, transitions,
+                # non-overworld areas (Maku Tree interior, dungeons),
+                # or milestone overworld rooms (gate, D1 entrance)
+                pass
             else:
                 self._consecutive_idle_steps += 1
 
