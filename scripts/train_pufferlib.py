@@ -1186,6 +1186,9 @@ def main():
     # Directional bonus
     reward_overrides["directional_bonus"] = _env_float("DIRECTIONAL_BONUS", 0.0)
 
+    # Idle penalty
+    reward_overrides["idle_penalty"] = _env_float("IDLE_PENALTY", 0.002)
+
     # Exploration decay parameters
     reward_overrides["exploration_decay"] = _env_float("EXPLORATION_DECAY", 0.9995)
     reward_overrides["exploration_decay_freq"] = int(os.getenv("EXPLORATION_DECAY_FREQ", "10"))

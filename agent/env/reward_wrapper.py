@@ -94,12 +94,18 @@ class RewardWrapper(gym.Wrapper):
         self._w_dialog = float(cfg.get("dialog_advance", 0.5))
         self._dialog_cap = int(cfg.get("dialog_cap", 20))
 
-        # --- Directional weight ---
+        # --- Directional weight (sub-room granular) ---
         self._w_directional = float(cfg.get("directional_bonus", 0.0))
         self._directional_target_row = int(cfg.get("directional_target_row",
                                                      os.getenv("DIRECTIONAL_TARGET_ROW", "9")))
         self._directional_target_col = int(cfg.get("directional_target_col",
                                                      os.getenv("DIRECTIONAL_TARGET_COL", "6")))
+        # Pre-compute target in absolute tile coords (10 tiles/room wide, 8 tall)
+        self._target_tile_x = self._directional_target_col * 10 + 5  # center
+        self._target_tile_y = self._directional_target_row * 8 + 4   # center
+
+        # --- Idle penalty weight ---
+        self._w_idle = float(cfg.get("idle_penalty", 0.002))
 
         # --- Exploration decay parameters ---
         decay_factor = float(cfg.get("exploration_decay", 0.9995))
@@ -168,6 +174,11 @@ class RewardWrapper(gym.Wrapper):
         # Directional tracking
         self._min_target_distance = 999
         self._last_overworld_room = None
+        self._last_pixel_x = 0
+        self._last_pixel_y = 0
+
+        # Idle tracking
+        self._consecutive_idle_steps = 0
 
         # Previous frame state
         self._prev_pixel_x = 0
@@ -230,15 +241,17 @@ class RewardWrapper(gym.Wrapper):
         """
         active_group = info.get("active_group", 0)
 
-        # Directional progress toward target (overworld only)
+        # Directional progress toward target — sub-room granular
+        # Uses absolute tile coords for smooth within-room gradients
         directional_val = 0.0
         if self._w_directional > 0 and self._last_overworld_room is not None:
             room = self._last_overworld_room
             row, col = room // 16, room % 16
-            # Value = how close we are (inverse distance), scaled
-            dist = abs(row - self._directional_target_row) + abs(col - self._directional_target_col)
-            max_dist = 20  # max meaningful distance on 16x16 grid
-            directional_val = self._w_directional * max(0, max_dist - dist)
+            abs_tile_x = col * 10 + (self._last_pixel_x // 16)
+            abs_tile_y = row * 8 + (self._last_pixel_y // 16)
+            tile_dist = abs(abs_tile_x - self._target_tile_x) + abs(abs_tile_y - self._target_tile_y)
+            max_tile_dist = 200
+            directional_val = self._w_directional * max(0.0, max_tile_dist - tile_dist) / 10.0
 
         return {
             # Permanent event flags
@@ -264,6 +277,9 @@ class RewardWrapper(gym.Wrapper):
 
             # Spatial progress
             "direction": directional_val,
+
+            # Idle penalty (negative component — grows each idle step)
+            "idle": -self._w_idle * self._consecutive_idle_steps,
         }
 
     # ------------------------------------------------------------------
@@ -315,9 +331,12 @@ class RewardWrapper(gym.Wrapper):
         self._max_dungeon_floor = 0
         self._maku_stage = self._baseline_maku_stage
 
-        # Directional tracking
+        # Directional tracking + idle reset
         start_room = info.get("room_id", 0)
         self._last_overworld_room = None
+        self._last_pixel_x = info.get("pixel_x", 0)
+        self._last_pixel_y = info.get("pixel_y", 0)
+        self._consecutive_idle_steps = 0
         if self._prev_group == 0:
             self._last_overworld_room = start_room
             row, col = start_room // 16, start_room % 16
@@ -394,7 +413,8 @@ class RewardWrapper(gym.Wrapper):
         if not is_transitioning:
             cur_px = info.get("pixel_x", 0)
             cur_py = info.get("pixel_y", 0)
-            if cur_px != self._prev_pixel_x or cur_py != self._prev_pixel_y:
+            moved = cur_px != self._prev_pixel_x or cur_py != self._prev_pixel_y
+            if moved:
                 # Qualify room for multi-group tracking
                 if active_group == 0:
                     qualified_room = room_id
@@ -402,9 +422,16 @@ class RewardWrapper(gym.Wrapper):
                     qualified_room = active_group * 256 + room_id
                 self._coverage.step(qualified_room, cur_px, cur_py)
 
-                # Track overworld room for directional
+                # Track overworld room + pixel for sub-room directional
                 if active_group == 0:
                     self._last_overworld_room = room_id
+                    self._last_pixel_x = cur_px
+                    self._last_pixel_y = cur_py
+
+                # Reset idle counter on movement
+                self._consecutive_idle_steps = 0
+            else:
+                self._consecutive_idle_steps += 1
 
             self._prev_pixel_x = cur_px
             self._prev_pixel_y = cur_py
