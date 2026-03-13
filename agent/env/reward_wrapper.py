@@ -45,6 +45,7 @@ from agent.env.ram_addresses import (
     SWORD_LEVEL,
 )
 
+from agent.env.dungeon_rewards import DungeonRewardTracker
 from agent.rl.rewards import CoverageReward, PotentialShaping
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,11 @@ class RewardWrapper(gym.Wrapper):
                                               os.getenv("D1_ENTRANCE_ROOM", "0x96")), 0)
 
         # Sub-modules
+        self._dungeon_tracker = DungeonRewardTracker(
+            reward_config=cfg,
+            dungeon_index=1,  # D1 Gnarled Root
+        )
+
         self._coverage = CoverageReward(
             exploration_inc=1.0,
             room_inc=1.0,
@@ -285,6 +291,9 @@ class RewardWrapper(gym.Wrapper):
 
             # Idle penalty (negative component — grows each idle step)
             "idle": -self._w_idle * self._consecutive_idle_steps,
+
+            # Dungeon-specific rewards (only change while in dungeon)
+            **self._dungeon_tracker.get_state_value(),
         }
 
     # ------------------------------------------------------------------
@@ -333,6 +342,9 @@ class RewardWrapper(gym.Wrapper):
         self._dialog_advance_count = 0
         self._essences_collected = 0
         self._dungeon_keys = 0
+
+        # Reset dungeon-specific tracker (separate from overworld)
+        self._dungeon_tracker.reset()
         self._max_dungeon_floor = 0
         self._maku_stage = self._baseline_maku_stage
 
@@ -440,12 +452,15 @@ class RewardWrapper(gym.Wrapper):
             cur_py = info.get("pixel_y", 0)
             moved = cur_px != self._prev_pixel_x or cur_py != self._prev_pixel_y
             if moved:
-                # Qualify room for multi-group tracking
-                if active_group == 0:
-                    qualified_room = room_id
-                else:
-                    qualified_room = active_group * 256 + room_id
-                self._coverage.step(qualified_room, cur_px, cur_py)
+                # Overworld coverage — skip dungeon (groups 4/5) to avoid
+                # cross-pollinating overworld exploration with dungeon rooms.
+                # Dungeon exploration is tracked separately by DungeonRewardTracker.
+                if active_group not in (4, 5):
+                    if active_group == 0:
+                        qualified_room = room_id
+                    else:
+                        qualified_room = active_group * 256 + room_id
+                    self._coverage.step(qualified_room, cur_px, cur_py)
 
                 # Track overworld room + pixel for sub-room directional
                 if active_group == 0:
@@ -467,6 +482,22 @@ class RewardWrapper(gym.Wrapper):
             self._prev_pixel_y = cur_py
 
         self._prev_group = active_group
+
+        # --- Update dungeon tracker (separate from overworld) ---
+        dungeon_idx = info.get("dungeon_index", 0xFF)
+        if hasattr(self.env, "_read"):
+            essences_now = bin(self.env._read(ESSENCES_COLLECTED)).count("1")
+            dungeon_milestones = self._dungeon_tracker.update(
+                read_fn=self.env._read,
+                room_id=room_id,
+                active_group=active_group,
+                dungeon_index=dungeon_idx,
+                essences_before=self._essences_collected,
+                essences_now=essences_now,
+            )
+            for ms in dungeon_milestones:
+                self._capture_milestone_state(ms, self._episode_total_reward)
+                self._episode_worthy = True
 
         # --- Compute delta reward ---
         new_state = self.get_game_state_value(info)
@@ -551,6 +582,10 @@ class RewardWrapper(gym.Wrapper):
         )
         info["milestone_entered_snow_region"] = float(self._milestone_entered_snow_region)
         info["milestone_reached_d1_entrance"] = float(self._milestone_reached_d1_entrance)
+        info["milestone_got_first_dungeon_key"] = float(self._dungeon_tracker.milestone_first_key)
+        info["milestone_got_boss_key"] = float(self._dungeon_tracker.milestone_boss_key)
+        info["milestone_defeated_boss"] = float(self._dungeon_tracker.milestone_boss_defeated)
+        info["milestone_dungeon_rooms"] = float(self._dungeon_tracker.unique_rooms)
         info["milestone_maku_dialog"] = float(self._maku_dialog_given)
         info["milestone_maku_seed"] = float(
             self._has_maku_seed and not self._baseline_maku_seed

@@ -478,12 +478,16 @@ def run_training_epoch(
         "total_gnarled_key": 0,
         "total_entered_snow_region": 0,
         "total_maku_seed": 0,
+        "total_got_first_dungeon_key": 0,
+        "total_got_boss_key": 0,
+        "total_defeated_boss": 0,
         "max_rooms": 0,
         "max_tiles": 0,
         "max_maku_rooms": 0,
         "max_essences": 0,
         "max_dungeon_keys": 0,
         "max_dungeon_floor": 0,
+        "max_dungeon_rooms": 0,
         # Save-state baseline — what the agent already has at episode start.
         # Captured once from the first completed episode (same for all episodes
         # since they share the same save state).  Used by the phase detector
@@ -606,6 +610,12 @@ def run_training_epoch(
                             milestones["total_entered_snow_region"] += 1
                         if env_info.get("milestone_maku_seed", 0) > 0:
                             milestones["total_maku_seed"] += 1
+                        if env_info.get("milestone_got_first_dungeon_key", 0) > 0:
+                            milestones["total_got_first_dungeon_key"] += 1
+                        if env_info.get("milestone_got_boss_key", 0) > 0:
+                            milestones["total_got_boss_key"] += 1
+                        if env_info.get("milestone_defeated_boss", 0) > 0:
+                            milestones["total_defeated_boss"] += 1
                         milestones["max_maku_rooms"] = max(
                             milestones["max_maku_rooms"],
                             int(env_info.get("milestone_maku_rooms", 0)),
@@ -629,6 +639,10 @@ def run_training_epoch(
                         milestones["max_dungeon_floor"] = max(
                             milestones["max_dungeon_floor"],
                             int(env_info.get("dungeon_floor", 0)),
+                        )
+                        milestones["max_dungeon_rooms"] = max(
+                            milestones["max_dungeon_rooms"],
+                            int(env_info.get("milestone_dungeon_rooms", 0)),
                         )
 
                         # Capture save-state baseline once (identical for all
@@ -956,6 +970,11 @@ def run_training_epoch(
     logger.info("  Entered snow region:  %d/%d episodes", milestones["total_entered_snow_region"], n_eps)
     logger.info("  Got Maku Seed:        %d/%d episodes", milestones["total_maku_seed"], n_eps)
     logger.info("  Entered dungeon:      %d/%d episodes", milestones["total_entered_dungeon"], n_eps)
+    logger.info("  --- Dungeon Progress ---")
+    logger.info("  Max dungeon rooms:    %d", milestones["max_dungeon_rooms"])
+    logger.info("  Got dungeon key:      %d/%d episodes", milestones["total_got_first_dungeon_key"], n_eps)
+    logger.info("  Got boss key:         %d/%d episodes", milestones["total_got_boss_key"], n_eps)
+    logger.info("  Defeated boss:        %d/%d episodes", milestones["total_defeated_boss"], n_eps)
     logger.info("  Max essences:         %d", milestones["max_essences"])
     logger.info("  Max dungeon keys:     %d", milestones["max_dungeon_keys"])
     logger.info("  Max dungeon floor:    %d", milestones["max_dungeon_floor"])
@@ -1175,6 +1194,15 @@ def main():
     reward_overrides["d1_entrance_bonus"] = _env_float("D1_ENTRANCE_BONUS", 12.0)
     reward_overrides["dungeon_entry"] = _env_float("DUNGEON_ENTRY", 20.0)
     reward_overrides["essence"] = _env_float("ESSENCE_BONUS", 30.0)
+
+    # Dungeon-specific reward weights (separate tracker)
+    reward_overrides["d_room_visit"] = _env_float("D_ROOM_VISIT", 5.0)
+    reward_overrides["d_small_key"] = _env_float("D_SMALL_KEY", 15.0)
+    reward_overrides["d_boss_key"] = _env_float("D_BOSS_KEY", 25.0)
+    reward_overrides["d_map"] = _env_float("D_MAP", 5.0)
+    reward_overrides["d_compass"] = _env_float("D_COMPASS", 5.0)
+    reward_overrides["d_room_clear"] = _env_float("D_ROOM_CLEAR", 3.0)
+    reward_overrides["d_boss_defeated"] = _env_float("D_BOSS_DEFEATED", 50.0)
 
     # Exploration weights (decaying cumulative)
     reward_overrides["grid_exploration"] = _env_float("GRID_EXPLORATION", 0.02)

@@ -32,6 +32,10 @@ MILESTONE_ORDER = [
     "gnarled_key",
     "entered_snow_region",
     "entered_dungeon",
+    # Dungeon interior milestones (D1 Gnarled Root)
+    "got_first_dungeon_key",
+    "got_boss_key",
+    "defeated_boss",
 ]
 
 # Mapping from milestone names to the milestones dict keys used in
@@ -44,6 +48,9 @@ MILESTONE_TO_COUNT_KEY = {
     "gnarled_key": "total_gnarled_key",
     "entered_snow_region": "total_entered_snow_region",
     "entered_dungeon": "total_entered_dungeon",
+    "got_first_dungeon_key": "total_got_first_dungeon_key",
+    "got_boss_key": "total_got_boss_key",
+    "defeated_boss": "total_defeated_boss",
 }
 
 
