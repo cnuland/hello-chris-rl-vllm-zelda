@@ -336,8 +336,24 @@ class RewardWrapper(gym.Wrapper):
         self._max_dungeon_floor = 0
         self._maku_stage = self._baseline_maku_stage
 
-        # Directional tracking + idle reset
+        # Baseline: if starting at D1 entrance or in snow region, pre-set
+        # the flags so they don't fire as new deltas (prevents reward hacking
+        # when using advancing checkpoints that start at these locations).
         start_room = info.get("room_id", 0)
+        self._start_room_id = start_room
+        if self._prev_group == 0:
+            sr, sc = start_room // 16, start_room % 16
+            if (self._baseline_gnarled_key
+                    and self._snow_region_min_row <= sr <= self._snow_region_max_row
+                    and self._snow_region_min_col <= sc <= self._snow_region_max_col):
+                self._entered_snow_region = True
+            if start_room == self._d1_entrance_room:
+                self._reached_d1_entrance = True
+                # D1 is inside the snow region, so also set that
+                if self._baseline_gnarled_key:
+                    self._entered_snow_region = True
+
+        # Directional tracking + idle reset
         self._last_overworld_room = None
         self._last_pixel_x = info.get("pixel_x", 0)
         self._last_pixel_y = info.get("pixel_y", 0)
